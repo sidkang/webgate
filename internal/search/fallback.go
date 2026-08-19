@@ -57,6 +57,9 @@ func Classify(err error) Classified {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return Classified{Kind: KindContinue, Code: CodeTimeout, Message: "web search timed out"}
 	}
+	if isTimeoutNetworkError(err) {
+		return Classified{Kind: KindContinue, Code: CodeTimeout, Message: "web search timed out"}
+	}
 	if isNetworkError(err) {
 		return Classified{Kind: KindContinue, Code: CodeBackendError, Message: "network error"}
 	}
@@ -76,6 +79,15 @@ func classifyCode(code Code, message string) Classified {
 		return Classified{Kind: KindStop, Code: code, Message: message}
 	}
 	return Classified{Kind: KindStop, Code: code, Message: message}
+}
+
+// isTimeoutNetworkError is true when err is (or wraps) a net.Error with Timeout().
+func isTimeoutNetworkError(err error) bool {
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	return false
 }
 
 func isNetworkError(err error) bool {

@@ -337,6 +337,24 @@ func TestLLMNothingConfiguredMissingConfig(t *testing.T) {
 	}
 }
 
+func TestOmitProviderNothingConfiguredMissingConfig(t *testing.T) {
+	h := server.New(server.Config{Token: testToken})
+	resp := postSearch(t, h, testToken, map[string]any{"query": "go"})
+	out := decode(t, resp)
+	if resp.Code != http.StatusBadRequest || out["code"] != "missing_config" {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestAutoNothingConfiguredMissingConfig(t *testing.T) {
+	h := server.New(server.Config{Token: testToken, Sources: map[string]search.Searcher{}})
+	resp := postSearch(t, h, testToken, map[string]any{"query": "go", "provider": "auto"})
+	out := decode(t, resp)
+	if resp.Code != http.StatusBadRequest || out["code"] != "missing_config" {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
 func TestNamedSearXNGDoesNotFallBack(t *testing.T) {
 	rec := &callRecorder{}
 	h := server.New(sources(map[string]search.Searcher{

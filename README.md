@@ -43,16 +43,22 @@ export SEARXNG_BASE_URL=http://127.0.0.1:8080   # needed for provider searxng / 
 go run ./cmd/webgate
 ```
 
-`POST /v1/search` with `Authorization: Bearer` and JSON `{"query":"..."}`. Optional `limit` 1–20.
+`POST /v1/search` with `Authorization: Bearer` and JSON body. Optional `limit` 1–20.
+
+With only `SEARXNG_BASE_URL` set (current `main.go`), send `provider: "searxng"` or `"auto"`:
+
+```json
+{"query":"...","provider":"searxng"}
+```
+
+Omitted/`"llm"` resolves to `openai` then `xai`, but those HTTP clients are not wired yet — so omitted/`llm` returns `missing_config` until a later ticket. `"auto"` works today because it can use SearXNG and skip unset OpenAI/xAI.
 
 `provider` resolution:
 
-- omitted or `"llm"` → sequential `openai` then `xai` (unconfigured sources skipped)
+- omitted or `"llm"` → sequential `openai` then `xai` (unconfigured sources skipped; needs OpenAI/xAI later)
 - `"auto"` → `searxng` then `openai` then `xai` (unconfigured skipped)
 - `"searxng"` | `"openai"` | `"xai"` → that source only (no fallback; missing → `missing_config`)
 - `"google"`, `"all"`, arrays, and unknown names → `invalid_input`
-
-OpenAI / xAI HTTP clients are not wired yet; inject them in tests or leave unset so `llm`/`auto` skip those slots. `SEARXNG_BASE_URL` still registers SearXNG for `searxng` / `auto`.
 
 ## Status
 

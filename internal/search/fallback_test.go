@@ -35,6 +35,12 @@ func TestClassifyTypedCodes(t *testing.T) {
 	}
 }
 
+type timeoutNetError struct{}
+
+func (timeoutNetError) Error() string   { return "i/o timeout" }
+func (timeoutNetError) Timeout() bool   { return true }
+func (timeoutNetError) Temporary() bool { return true }
+
 func TestClassifyContextAndNetwork(t *testing.T) {
 	if got := search.Classify(context.Canceled); got.Kind != search.KindStop || got.Code != search.CodeAborted {
 		t.Fatalf("canceled: %+v", got)
@@ -52,6 +58,18 @@ func TestClassifyContextAndNetwork(t *testing.T) {
 	}
 	if got := search.Classify(errors.New("surprise")); got.Kind != search.KindStop || got.Code != search.CodeBackendError {
 		t.Fatalf("generic: %+v", got)
+	}
+}
+
+func TestClassifyNetTimeoutIsTimeout(t *testing.T) {
+	got := search.Classify(timeoutNetError{})
+	if got.Kind != search.KindContinue || got.Code != search.CodeTimeout {
+		t.Fatalf("timeout net.Error: %+v", got)
+	}
+	wrapped := &url.Error{Op: "Get", URL: "http://x", Err: timeoutNetError{}}
+	got = search.Classify(wrapped)
+	if got.Kind != search.KindContinue || got.Code != search.CodeTimeout {
+		t.Fatalf("wrapped timeout: %+v", got)
 	}
 }
 
