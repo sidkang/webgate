@@ -27,6 +27,7 @@ func TestParseFetchURL(t *testing.T) {
 		"http://[febf::1]/",
 		"http://metadata/",
 		"http://metadata.google.internal/",
+		"http://foo.local./",
 	}
 	for _, in := range cases {
 		if _, reason, _ := fetch.ParseFetchURL(in); reason == "" {

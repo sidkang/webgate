@@ -11,6 +11,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
+	cdpfetch "github.com/chromedp/cdproto/fetch"
+	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 	"github.com/gobwas/ws"
@@ -25,7 +29,9 @@ type CDPCapturer struct {
 
 var wsDialMu sync.Mutex
 
-// Capture opens a background tab, navigates, waits/scrolls briefly, reads HTML, and closes only that tab.
+// Capture opens a background tab, enables main-frame Document Fetch SSRF, navigates,
+// waits/scrolls briefly, reads HTML, and closes only that tab.
+// Never Fetch.disable (would resume a blocked redirect).
 func (c CDPCapturer) Capture(ctx context.Context, pageURL string) (Page, error) {
 	if strings.TrimSpace(c.Endpoint) == "" {
 		return Page{}, NewError(CodeMissingConfig, "No CDP endpoint is configured. Set CDP_ENDPOINT.")
@@ -42,7 +48,6 @@ func (c CDPCapturer) Capture(ctx context.Context, pageURL string) (Page, error) 
 		return Page{}, NewError(CodeBackendError, "cdp endpoint discovery failed")
 	}
 
-	// chromedp's websocket dial has no header hook; temporarily set DefaultDialer headers.
 	if c.APIKey != "" {
 		wsDialMu.Lock()
 		prev := ws.DefaultDialer
@@ -60,8 +65,146 @@ func (c CDPCapturer) Capture(ctx context.Context, pageURL string) (Page, error) 
 	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, wsURL, chromedp.NoModifyURL)
 	defer allocCancel()
 
-	tabCtx, tabCancel := chromedp.NewContext(allocCtx)
+	// Bootstrap context allocates the remote browser and a temporary tab we close.
+	bootCtx, bootCancel := chromedp.NewContext(allocCtx)
+	defer bootCancel()
+
+	var bgTargetID target.ID
+	if err := chromedp.Run(bootCtx, chromedp.ActionFunc(func(ctx context.Context) error {
+		c := chromedp.FromContext(ctx)
+		browserExec := cdp.WithExecutor(ctx, c.Browser)
+		id, err := target.CreateTarget("about:blank").WithBackground(true).Do(browserExec)
+		if err != nil {
+			return err
+		}
+		bgTargetID = id
+		// Close the auto-created foreground tab; keep only the background target.
+		if c.Target != nil && c.Target.TargetID != "" && c.Target.TargetID != bgTargetID {
+			_ = target.CloseTarget(c.Target.TargetID).Do(browserExec)
+		}
+		return nil
+	})); err != nil {
+		if ctx.Err() != nil {
+			return Page{}, mapCtxErr(ctx.Err())
+		}
+		return Page{}, NewError(CodeBackendError, "cdp create target failed")
+	}
+
+	tabCtx, tabCancel := chromedp.NewContext(bootCtx, chromedp.WithTargetID(bgTargetID))
 	defer tabCancel()
+
+	lookup := c.Lookup
+
+	var (
+		guardMu   sync.Mutex
+		guardErr  error
+		mainFrame cdp.FrameID
+		pending   sync.WaitGroup
+		openReqs  sync.Map // requestID → struct{}
+	)
+
+	setGuardErr := func(err error) {
+		if err == nil {
+			return
+		}
+		guardMu.Lock()
+		if guardErr == nil {
+			guardErr = err
+		}
+		guardMu.Unlock()
+	}
+	getGuardErr := func() error {
+		guardMu.Lock()
+		defer guardMu.Unlock()
+		return guardErr
+	}
+
+	failPaused := func(requestID cdpfetch.RequestID) {
+		// Independent of capture ctx — host TEARDOWN_TIMEOUT_MS.
+		tctx, cancel := context.WithTimeout(context.Background(), time.Duration(TeardownTimeoutMS)*time.Millisecond)
+		defer cancel()
+		cc := chromedp.FromContext(tabCtx)
+		if cc == nil || cc.Target == nil {
+			return
+		}
+		exec := cdp.WithExecutor(tctx, cc.Target)
+		_ = cdpfetch.FailRequest(requestID, network.ErrorReasonBlockedByClient).Do(exec)
+	}
+
+	chromedp.ListenTarget(tabCtx, func(ev any) {
+		paused, ok := ev.(*cdpfetch.EventRequestPaused)
+		if !ok || paused == nil {
+			return
+		}
+		pending.Add(1)
+		go func(ev *cdpfetch.EventRequestPaused) {
+			defer pending.Done()
+			reqURL := ""
+			if ev.Request != nil {
+				reqURL = ev.Request.URL
+			}
+			resourceType := string(ev.ResourceType)
+			frameID := string(ev.FrameID)
+			mainID := string(mainFrame)
+
+			action := DecideFetchPaused(resourceType, frameID, mainID, reqURL)
+			cc := chromedp.FromContext(tabCtx)
+			if cc == nil || cc.Target == nil {
+				return
+			}
+
+			if action == PausedFail {
+				openReqs.Store(string(ev.RequestID), struct{}{})
+				failPaused(ev.RequestID)
+				openReqs.Delete(string(ev.RequestID))
+				setGuardErr(NewError(CodeInvalidInput, "URL hostname is blocked for local, private, or metadata destinations."))
+				return
+			}
+
+			if IsMainFrameDocument(resourceType, frameID, mainID) {
+				openReqs.Store(string(ev.RequestID), struct{}{})
+				defer openReqs.Delete(string(ev.RequestID))
+				if _, err := AssertFetchURLAllowed(ctx, reqURL, lookup); err != nil {
+					failPaused(ev.RequestID)
+					setGuardErr(err)
+					return
+				}
+			}
+
+			contCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			defer cancel()
+			exec := cdp.WithExecutor(contCtx, cc.Target)
+			if err := cdpfetch.ContinueRequest(ev.RequestID).Do(exec); err != nil {
+				if ctx.Err() != nil {
+					setGuardErr(mapCtxErr(ctx.Err()))
+				}
+			}
+		}(paused)
+	})
+
+	setupErr := chromedp.Run(tabCtx, chromedp.ActionFunc(func(ctx context.Context) error {
+		if err := page.Enable().Do(ctx); err != nil {
+			return err
+		}
+		tree, err := page.GetFrameTree().Do(ctx)
+		if err != nil {
+			return err
+		}
+		if tree == nil || tree.Frame == nil {
+			return fmt.Errorf("cdp missing main frame")
+		}
+		mainFrame = tree.Frame.ID
+		return cdpfetch.Enable().WithPatterns([]*cdpfetch.RequestPattern{{
+			RequestStage: cdpfetch.RequestStageRequest,
+			ResourceType: network.ResourceTypeDocument,
+		}}).Do(ctx)
+	}))
+	if setupErr != nil {
+		if ctx.Err() != nil {
+			return Page{}, mapCtxErr(ctx.Err())
+		}
+		return Page{}, NewError(CodeBackendError, "cdp fetch enable failed")
+	}
 
 	var (
 		finalURL string
@@ -72,13 +215,41 @@ func (c CDPCapturer) Capture(ctx context.Context, pageURL string) (Page, error) 
 	runErr := chromedp.Run(tabCtx,
 		chromedp.Navigate(pageURL),
 		chromedp.ActionFunc(func(ctx context.Context) error {
+			// Wait for Fetch.requestPaused handlers to settle (continue/fail).
+			done := make(chan struct{})
+			go func() {
+				pending.Wait()
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			if err := getGuardErr(); err != nil {
+				return err
+			}
 			return boundedLazyLoad(ctx)
 		}),
 		chromedp.Location(&finalURL),
 		chromedp.Title(&title),
 		chromedp.OuterHTML("html", &html, chromedp.ByQuery),
 	)
+
+	// Fail any still-open main-frame requests without Fetch.disable.
+	openReqs.Range(func(key, _ any) bool {
+		failPaused(cdpfetch.RequestID(key.(string)))
+		return true
+	})
+
+	if err := getGuardErr(); err != nil {
+		return Page{}, err
+	}
 	if runErr != nil {
+		var fe *Error
+		if asFetchError(runErr, &fe) {
+			return Page{}, fe
+		}
 		if ctx.Err() != nil {
 			return Page{}, mapCtxErr(ctx.Err())
 		}
@@ -88,21 +259,17 @@ func (c CDPCapturer) Capture(ctx context.Context, pageURL string) (Page, error) 
 		return Page{}, NewError(CodeBackendError, "cdp capture failed")
 	}
 
-	if finalURL != "" && finalURL != pageURL {
-		if _, gerr := AssertFetchURLAllowed(ctx, finalURL, c.Lookup); gerr != nil {
-			return Page{}, gerr
-		}
-	}
 	if len([]byte(html)) > MaxCaptureBytes {
 		return Page{}, NewError(CodeBackendError, fmt.Sprintf("Captured HTML exceeds the %d MiB limit.", MaxCaptureBytes/(1024*1024)))
 	}
 
+	// Close only the owned background tab (tabCancel also closes it).
 	_ = chromedp.Run(tabCtx, chromedp.ActionFunc(func(ctx context.Context) error {
 		t := chromedp.FromContext(ctx).Target
 		if t == nil {
 			return nil
 		}
-		return target.CloseTarget(t.TargetID).Do(ctx)
+		return target.CloseTarget(t.TargetID).Do(cdp.WithExecutor(ctx, chromedp.FromContext(ctx).Browser))
 	}))
 
 	if finalURL == "" {
@@ -114,6 +281,17 @@ func (c CDPCapturer) Capture(ctx context.Context, pageURL string) (Page, error) 
 		Title:        title,
 		HTML:         html,
 	}, nil
+}
+
+func asFetchError(err error, target **Error) bool {
+	if err == nil {
+		return false
+	}
+	if e, ok := err.(*Error); ok {
+		*target = e
+		return true
+	}
+	return false
 }
 
 func resolveCDPWebsocketURL(ctx context.Context, endpoint, apiKey string) (string, error) {

@@ -143,6 +143,11 @@ func TestFetchRejectsProfile(t *testing.T) {
 	if decode(t, rec)["code"] != "invalid_input" {
 		t.Fatalf("body=%s", rec.Body.String())
 	}
+	// JSON null must also reject (key present).
+	rec = postFetch(t, h, testToken, map[string]any{"url": "https://example.com", "profile": nil})
+	if decode(t, rec)["code"] != "invalid_input" {
+		t.Fatalf("null profile body=%s", rec.Body.String())
+	}
 }
 
 func TestFetchModesShareCapturer(t *testing.T) {

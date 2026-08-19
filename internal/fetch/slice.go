@@ -15,6 +15,8 @@ const (
 	LazyLoadStepViewports        = 0.8
 	LazyLoadMaxDistanceViewports = 2.4
 	LazyLoadMaxMS                = 5_000
+
+	TeardownTimeoutMS = 2_000
 )
 
 // NormalizeMaxInlineChars applies the host defaults and hard cap.
@@ -37,6 +39,8 @@ type ContentSlice struct {
 }
 
 // InitialContentSlice truncates content like host fetch-content initialContentSlice.
+// Counting and newline snap are done entirely in rune space (not UTF-8 byte indexes),
+// so CJK content cannot panic by mixing byte offsets into a []rune slice.
 func InitialContentSlice(content string, maxChars int) ContentSlice {
 	limit := NormalizeMaxInlineChars(maxChars)
 	runes := []rune(content)
@@ -45,10 +49,13 @@ func InitialContentSlice(content string, maxChars int) ContentSlice {
 	if endOffset > limit {
 		endOffset = limit
 		if endOffset < total {
-			window := string(runes[:endOffset])
-			lineBreak := lastIndexByte(window, '\n')
-			if lineBreak >= limit*8/10 {
-				endOffset = lineBreak + 1
+			// Prefer breaking on a newline at or after 80% of the limit (rune indexes).
+			minBreak := limit * 8 / 10
+			for i := endOffset - 1; i >= minBreak; i-- {
+				if runes[i] == '\n' {
+					endOffset = i + 1
+					break
+				}
 			}
 		}
 	}
@@ -56,18 +63,9 @@ func InitialContentSlice(content string, maxChars int) ContentSlice {
 	return ContentSlice{
 		Text:          text,
 		TotalChars:    total,
-		ReturnedChars: len([]rune(text)),
+		ReturnedChars: endOffset,
 		Truncated:     endOffset < total,
 	}
-}
-
-func lastIndexByte(s string, c byte) int {
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] == c {
-			return i
-		}
-	}
-	return -1
 }
 
 // TruncationNotice is appended when content is truncated (host wording).

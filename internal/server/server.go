@@ -67,10 +67,10 @@ type searchRequest struct {
 }
 
 type fetchRequest struct {
-	URL     string           `json:"url"`
-	Mode    any              `json:"mode"`
-	Kernel  any              `json:"kernel"`
-	Profile *json.RawMessage `json:"profile"` // present (even null) → invalid_input
+	URL     string          `json:"url"`
+	Mode    any             `json:"mode"`
+	Kernel  any             `json:"kernel"`
+	Profile json.RawMessage `json:"profile"` // key present (incl. null) → invalid_input
 }
 
 type errorBody struct {
@@ -134,7 +134,7 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_input", "request body must be JSON")
 		return
 	}
-	if req.Profile != nil {
+	if len(req.Profile) > 0 {
 		writeError(w, http.StatusBadRequest, "invalid_input", "profile must not be sent by clients")
 		return
 	}
