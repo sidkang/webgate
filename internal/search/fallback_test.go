@@ -75,21 +75,35 @@ func TestClassifyNetTimeoutIsTimeout(t *testing.T) {
 
 func TestParseProvider(t *testing.T) {
 	plan, err := search.ParseProvider(nil)
-	if err != nil || !plan.SkipMissing || len(plan.Chain) != 2 || plan.Chain[0] != "openai" {
+	if err != nil || !plan.SkipMissing || len(plan.Chain) != 2 || plan.Chain[0] != "openai" || plan.Parallel {
 		t.Fatalf("nil: %+v err=%v", plan, err)
 	}
 	plan, err = search.ParseProvider("auto")
-	if err != nil || plan.Chain[0] != "searxng" || !plan.SkipMissing {
+	if err != nil || plan.Chain[0] != "searxng" || !plan.SkipMissing || plan.Parallel {
 		t.Fatalf("auto: %+v err=%v", plan, err)
 	}
 	plan, err = search.ParseProvider("searxng")
-	if err != nil || plan.SkipMissing || len(plan.Chain) != 1 {
+	if err != nil || plan.SkipMissing || len(plan.Chain) != 1 || plan.Parallel {
 		t.Fatalf("named: %+v err=%v", plan, err)
 	}
 	if _, err := search.ParseProvider("google"); err == nil || err.Code != search.CodeInvalidInput {
 		t.Fatalf("google: %v", err)
 	}
+	if _, err := search.ParseProvider("all"); err == nil || err.Code != search.CodeInvalidInput {
+		t.Fatalf("all: %v", err)
+	}
 	if _, err := search.ParseProvider([]any{"openai"}); err == nil || err.Code != search.CodeInvalidInput {
-		t.Fatalf("array: %v", err)
+		t.Fatalf("len1 array: %v", err)
+	}
+	plan, err = search.ParseProvider([]any{"openai", "xai"})
+	if err != nil || !plan.Parallel || len(plan.Chain) != 2 || plan.Chain[0] != "openai" || plan.Chain[1] != "xai" {
+		t.Fatalf("list: %+v err=%v", plan, err)
+	}
+	plan, err = search.ParseProvider([]string{"openai", "openai", "xai"})
+	if err != nil || !plan.Parallel || len(plan.Chain) != 2 {
+		t.Fatalf("dedupe: %+v err=%v", plan, err)
+	}
+	if _, err := search.ParseProvider([]any{"google", "openai"}); err == nil || err.Code != search.CodeInvalidInput {
+		t.Fatalf("google in list: %v", err)
 	}
 }

@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sidkang/webgate/internal/search"
 	"github.com/sidkang/webgate/internal/server"
@@ -479,15 +481,234 @@ func TestProviderGoogleAndAllInvalid(t *testing.T) {
 	}
 }
 
-func TestProviderArrayInvalid(t *testing.T) {
+func TestProviderListMergeSuccess(t *testing.T) {
+	rec := &callRecorder{}
+	var mergeCalls int
+	var mu sync.Mutex
+	cfg := sources(map[string]search.Searcher{
+		"openai": rec.track("openai", search.Fixed{Result: okResult("from openai")}),
+		"xai":    rec.track("xai", search.Fixed{Result: okResult("from xai")}),
+	})
+	cfg.Merger = search.MergerFunc(func(ctx context.Context, query string, labelled []search.LabelledAnswer) (string, error) {
+		mu.Lock()
+		mergeCalls++
+		mu.Unlock()
+		if query != "go" {
+			t.Fatalf("query=%q", query)
+		}
+		if len(labelled) != 2 {
+			t.Fatalf("labelled=%d", len(labelled))
+		}
+		return "merged answer", nil
+	})
+	h := server.New(cfg)
+	resp := postSearch(t, h, testToken, map[string]any{"query": "go", "provider": []any{"openai", "xai"}})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	out := decode(t, resp)
+	if out["answer"] != "merged answer" {
+		t.Fatalf("answer=%v", out["answer"])
+	}
+	merge, ok := out["merge"].(map[string]any)
+	if !ok || merge["ok"] != true {
+		t.Fatalf("merge=%v", out["merge"])
+	}
+	prov, ok := out["provider"].([]any)
+	if !ok || len(prov) != 2 || prov[0] != "openai" || prov[1] != "xai" {
+		t.Fatalf("provider=%v", out["provider"])
+	}
+	got := rec.snapshot()
+	if len(got) != 2 {
+		t.Fatalf("calls=%v", got)
+	}
+	seen := map[string]bool{}
+	for _, n := range got {
+		seen[n] = true
+	}
+	if !seen["openai"] || !seen["xai"] {
+		t.Fatalf("calls=%v", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if mergeCalls != 1 {
+		t.Fatalf("mergeCalls=%d", mergeCalls)
+	}
+}
+
+func TestProviderListRunsInParallel(t *testing.T) {
+	var entered sync.WaitGroup
+	entered.Add(2)
+	var release sync.WaitGroup
+	release.Add(1)
+	cfg := sources(map[string]search.Searcher{
+		"openai": search.RequestFunc(func(ctx context.Context, req search.Request) (search.Result, error) {
+			entered.Done()
+			release.Wait()
+			return okResult("from openai"), nil
+		}),
+		"xai": search.RequestFunc(func(ctx context.Context, req search.Request) (search.Result, error) {
+			entered.Done()
+			release.Wait()
+			return okResult("from xai"), nil
+		}),
+	})
+	cfg.Merger = search.MergerFunc(func(ctx context.Context, query string, labelled []search.LabelledAnswer) (string, error) {
+		return "merged", nil
+	})
+	h := server.New(cfg)
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- postSearch(t, h, testToken, map[string]any{"query": "go", "provider": []any{"openai", "xai"}})
+	}()
+
+	waitCh := make(chan struct{})
+	go func() {
+		entered.Wait()
+		close(waitCh)
+	}()
+	select {
+	case <-waitCh:
+		// both sources entered before either finished → parallel
+	case <-time.After(2 * time.Second):
+		t.Fatal("sources did not run concurrently")
+	}
+	release.Done()
+	resp := <-done
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestProviderListRejectsMergeFieldAndAll(t *testing.T) {
+	cfg := sources(map[string]search.Searcher{
+		"openai": search.Fixed{Result: okResult("ok")},
+		"xai":    search.Fixed{Result: okResult("ok")},
+	})
+	cfg.Merger = search.MergerFunc(func(ctx context.Context, query string, labelled []search.LabelledAnswer) (string, error) {
+		return "merged", nil
+	})
+	h := server.New(cfg)
+
+	resp := postSearch(t, h, testToken, map[string]any{"query": "go", "provider": "all"})
+	out := decode(t, resp)
+	if resp.Code != http.StatusBadRequest || out["code"] != "invalid_input" {
+		t.Fatalf("all: status=%d body=%s", resp.Code, resp.Body.String())
+	}
+
+	resp = postSearch(t, h, testToken, map[string]any{"query": "go", "provider": []any{"openai", "xai"}, "merge": true})
+	out = decode(t, resp)
+	if resp.Code != http.StatusBadRequest || out["code"] != "invalid_input" {
+		t.Fatalf("merge field: status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if out["error"] != "merge is not a request field" {
+		t.Fatalf("merge error=%v", out["error"])
+	}
+}
+
+func TestProviderListInvalidEntries(t *testing.T) {
 	h := server.New(sources(map[string]search.Searcher{
 		"openai": search.Fixed{Result: okResult("ok")},
 		"xai":    search.Fixed{Result: okResult("ok")},
 	}))
+	cases := []any{
+		[]any{"google", "openai"},
+		[]any{"searxng"},
+		[]any{"openai", 1},
+	}
+	for _, provider := range cases {
+		resp := postSearch(t, h, testToken, map[string]any{"query": "go", "provider": provider})
+		out := decode(t, resp)
+		if resp.Code != http.StatusBadRequest || out["code"] != "invalid_input" {
+			t.Fatalf("provider=%v status=%d body=%s", provider, resp.Code, resp.Body.String())
+		}
+	}
+}
+
+func TestProviderListMergeInventedURLDegraded(t *testing.T) {
+	cfg := sources(map[string]search.Searcher{
+		"openai": search.Fixed{Result: okResult("from openai")},
+		"xai":    search.Fixed{Result: okResult("from xai")},
+	})
+	cfg.Merger = search.MergerFunc(func(ctx context.Context, query string, labelled []search.LabelledAnswer) (string, error) {
+		return "see https://invented.example/page", nil
+	})
+	h := server.New(cfg)
 	resp := postSearch(t, h, testToken, map[string]any{"query": "go", "provider": []any{"openai", "xai"}})
-	out := decode(t, resp)
-	if resp.Code != http.StatusBadRequest || out["code"] != "invalid_input" {
+	if resp.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	out := decode(t, resp)
+	merge, ok := out["merge"].(map[string]any)
+	if !ok || merge["ok"] != false || merge["code"] != "invalid_response" {
+		t.Fatalf("merge=%v", out["merge"])
+	}
+	answer, _ := out["answer"].(string)
+	if !strings.Contains(answer, "## openai") || !strings.Contains(answer, "## xai") {
+		t.Fatalf("answer=%q", answer)
+	}
+}
+
+func TestProviderListMergeMissingConfig(t *testing.T) {
+	h := server.New(sources(map[string]search.Searcher{
+		"openai": search.Fixed{Result: okResult("from openai")},
+		"xai":    search.Fixed{Result: okResult("from xai")},
+	}))
+	resp := postSearch(t, h, testToken, map[string]any{"query": "go", "provider": []any{"openai", "xai"}})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	out := decode(t, resp)
+	merge, ok := out["merge"].(map[string]any)
+	if !ok || merge["ok"] != false || merge["code"] != "missing_config" {
+		t.Fatalf("merge=%v", out["merge"])
+	}
+	answer, _ := out["answer"].(string)
+	if !strings.Contains(answer, "## openai") || !strings.Contains(answer, "from openai") {
+		t.Fatalf("answer=%q", answer)
+	}
+}
+
+func TestProviderListOneSuccessNoMerge(t *testing.T) {
+	var mergeCalls int
+	cfg := sources(map[string]search.Searcher{
+		"openai": search.Fixed{Err: search.NewError(search.CodeBackendError, "down")},
+		"xai":    search.Fixed{Result: okResult("from xai only")},
+	})
+	cfg.Merger = search.MergerFunc(func(ctx context.Context, query string, labelled []search.LabelledAnswer) (string, error) {
+		mergeCalls++
+		return "should not run", nil
+	})
+	h := server.New(cfg)
+	resp := postSearch(t, h, testToken, map[string]any{"query": "go", "provider": []any{"openai", "xai"}})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	out := decode(t, resp)
+	if out["answer"] != "from xai only" || out["provider"] != "xai" {
+		t.Fatalf("body=%s", resp.Body.String())
+	}
+	if _, has := out["merge"]; has {
+		t.Fatalf("unexpected merge=%v", out["merge"])
+	}
+	if mergeCalls != 0 {
+		t.Fatalf("mergeCalls=%d", mergeCalls)
+	}
+}
+
+func TestProviderListBothFail(t *testing.T) {
+	h := server.New(sources(map[string]search.Searcher{
+		"openai": search.Fixed{Err: search.NewError(search.CodeBackendError, "openai")},
+		"xai":    search.Fixed{Err: search.NewError(search.CodeTimeout, "xai")},
+	}))
+	resp := postSearch(t, h, testToken, map[string]any{"query": "go", "provider": []any{"openai", "xai"}})
+	if resp.Code == http.StatusOK {
+		t.Fatalf("expected failure, body=%s", resp.Body.String())
+	}
+	out := decode(t, resp)
+	if out["code"] != "timeout" {
+		t.Fatalf("code=%v body=%s", out["code"], resp.Body.String())
 	}
 }
 

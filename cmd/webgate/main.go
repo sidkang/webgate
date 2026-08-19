@@ -35,6 +35,7 @@ func main() {
 
 	if openai := openAIFromEnv(); openai != nil {
 		sources[search.SourceOpenAI] = *openai
+		cfg.Merger = search.OpenAIMerger{Client: openai.Client, Model: openai.Model}
 	}
 	if xai := xaiFromEnv(); xai != nil {
 		sources[search.SourceXAI] = *xai

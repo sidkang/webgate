@@ -75,7 +75,9 @@ go run ./cmd/webgate
 - omitted or `"llm"` → sequential `openai` then `xai` (unconfigured skipped)
 - `"auto"` → `searxng` then `openai` then `xai`
 - `"searxng"` | `"openai"` | `"xai"` → that source only (no fallback)
-- `"google"`, `"all"`, arrays → `invalid_input`
+- JSON array of **two or more** of those names → run configured sources **in parallel**, dedupe evidence, and **always** LLM-merge with the OpenAI Responses model (`OPENAI_*`). Response `provider` is the list that ran; `merge.ok` is true on success. Merge failure still returns HTTP 200 with labelled per-source answers (`## openai\n…`) plus `merge: {ok:false, code, error}` — not a total search failure. A length-1 array is invalid (list-merge only). Unconfigured names in the list are skipped; if only one configured source remains, that single result is returned without merge.
+- `"google"`, `"all"` → `invalid_input`
+- There is **no** `merge` request field (any value → `invalid_input`)
 
 Extra fields: `search_context_size` (`low`|`medium`|`high`, OpenAI default high); `allowed_domains`; `user_location` (country only if two-letter ISO code — names like `"China"` are dropped). xAI ignores context size / location and rejects >5 allowed domains.
 
@@ -99,4 +101,4 @@ Acquires one URL via CDP Attach to the **server-configured** Cloak profile. Clie
 
 ## Status
 
-#5: OpenAI / xAI `web_search` sources + `POST /v1/x_search`. List-merge and compose are later tickets.
+#6: Provider list → parallel search + always LLM-merge (no `merge` request field).

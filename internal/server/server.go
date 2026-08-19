@@ -14,6 +14,7 @@ import (
 type Config struct {
 	Token          string
 	Sources        map[string]search.Searcher
+	Merger         search.Merger
 	XSearch        *search.XSearch
 	CloakDisabled  bool
 	CDPEndpoint    string
@@ -28,6 +29,7 @@ type Config struct {
 type Server struct {
 	token   string
 	sources map[string]search.Searcher
+	merger  search.Merger
 	xsearch *search.XSearch
 	fetch   *fetch.Service
 	mux     *http.ServeMux
@@ -41,6 +43,7 @@ func New(cfg Config) http.Handler {
 	s := &Server{
 		token:   cfg.Token,
 		sources: sources,
+		merger:  cfg.Merger,
 		xsearch: cfg.XSearch,
 		fetch: fetch.NewService(fetch.ServiceConfig{
 			CloakDisabled:  cfg.CloakDisabled,
@@ -68,6 +71,7 @@ type searchRequest struct {
 	Query             string               `json:"query"`
 	Limit             *int                 `json:"limit"`
 	Provider          any                  `json:"provider"`
+	Merge             json.RawMessage      `json:"merge"`
 	SearchContextSize any                  `json:"search_context_size"`
 	AllowedDomains    []string             `json:"allowed_domains"`
 	UserLocation      *search.UserLocation `json:"user_location"`
@@ -100,6 +104,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	var req searchRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_input", "request body must be JSON")
+		return
+	}
+	if len(req.Merge) > 0 {
+		writeError(w, http.StatusBadRequest, "invalid_input", "merge is not a request field")
 		return
 	}
 	query := strings.TrimSpace(req.Query)
@@ -135,6 +143,30 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		AllowedDomains:    req.AllowedDomains,
 		UserLocation:      req.UserLocation,
 	}
+
+	if plan.Parallel {
+		out, err := search.SearchParallel(r.Context(), s.sources, plan.Chain, searchReq, s.merger)
+		if err != nil {
+			writeSearchError(w, err)
+			return
+		}
+		payload := map[string]any{
+			"answer":   out.Result.Answer,
+			"sources":  out.Result.Sources,
+			"provider": out.Provider,
+		}
+		if out.Merge != nil {
+			m := map[string]any{"ok": out.Merge.OK}
+			if !out.Merge.OK {
+				m["code"] = out.Merge.Code
+				m["error"] = out.Merge.Error
+			}
+			payload["merge"] = m
+		}
+		writeJSON(w, http.StatusOK, payload)
+		return
+	}
+
 	result, winner, err := search.SearchChain(r.Context(), s.sources, plan.Chain, searchReq, plan.SkipMissing)
 	if err != nil {
 		writeSearchError(w, err)
