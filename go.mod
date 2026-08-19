@@ -8,6 +8,7 @@ require (
 	github.com/go-shiori/go-readability v0.0.0-20251205110129-5db1dc9836f0
 	github.com/gobwas/ws v1.4.0
 	github.com/markusmobius/go-trafilatura v1.12.2
+	github.com/openai/openai-go/v3 v3.52.0
 	golang.org/x/net v0.58.0
 )
 
@@ -31,7 +32,6 @@ require (
 	github.com/markusmobius/go-htmldate v1.9.1 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/openai/openai-go/v3 v3.52.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/rs/zerolog v1.33.0 // indirect
 	github.com/tetratelabs/wazero v1.8.1 // indirect

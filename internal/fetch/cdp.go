@@ -351,6 +351,11 @@ func runCapturePipeline(
 		return evaluateSignature(ctx)
 	}
 	docGen := func() int { return int(documentGeneration.Load()) }
+	// Shared operation deadline from the service ctx (e.g. 60s fetch timeout).
+	opDeadlineAt := int64(0)
+	if dl, ok := ctx.Deadline(); ok {
+		opDeadlineAt = dl.UnixMilli()
+	}
 	waitPending := func() error {
 		done := make(chan struct{})
 		go func() {
@@ -383,6 +388,7 @@ func runCapturePipeline(
 			Now:          nowFn,
 			Sleep:        sleepFn,
 			ThrowIfGuard: throwIfGuard,
+			DeadlineAt:   opDeadlineAt,
 		}); err != nil {
 			return err
 		}
@@ -399,18 +405,19 @@ func runCapturePipeline(
 		}
 
 		sig, err := WaitForReadiness(ctx, WaitForReadinessOpts{
-			Sample:             sample,
-			Now:                nowFn,
-			Sleep:              sleepFn,
-			IsQuiet:            tracker.IsQuiet,
-			ThrowIfGuard:       throwIfGuard,
-			DocumentGeneration: docGen,
-			ExpectedGeneration: expected,
-			HasExpectedGen:     true,
-			MaxMS:              readinessMax,
-			MinObserveMS:       minObserve,
-			QuietMS:            ReadinessQuietMS,
-			SampleMS:           ReadinessSampleMS,
+			Sample:              sample,
+			Now:                 nowFn,
+			Sleep:               sleepFn,
+			IsQuiet:             tracker.IsQuiet,
+			ThrowIfGuard:        throwIfGuard,
+			DocumentGeneration:  docGen,
+			ExpectedGeneration:  expected,
+			HasExpectedGen:      true,
+			MaxMS:               readinessMax,
+			MinObserveMS:        minObserve,
+			QuietMS:             ReadinessQuietMS,
+			SampleMS:            ReadinessSampleMS,
+			OperationDeadlineAt: opDeadlineAt,
 		})
 		if err != nil {
 			return err
@@ -420,7 +427,7 @@ func runCapturePipeline(
 		}
 
 		if !isRestart && docGen() == expected {
-			sig, err = boundedLazyLoadPipeline(ctx, tracker, sig, sample, nowFn, sleepFn, throwIfGuard, docGen, expected)
+			sig, err = boundedLazyLoadPipeline(ctx, tracker, sig, sample, nowFn, sleepFn, throwIfGuard, docGen, expected, opDeadlineAt)
 			if err != nil {
 				return err
 			}
@@ -444,6 +451,9 @@ func runCapturePipeline(
 		if restarts > DocumentRestartMax {
 			return nil
 		}
+		if opDeadlineAt > 0 && nowFn() >= opDeadlineAt {
+			return nil
+		}
 	}
 }
 
@@ -457,9 +467,10 @@ func boundedLazyLoadPipeline(
 	throwIfGuard func() error,
 	docGen func() int,
 	expected int,
+	opDeadlineAt int64,
 ) (ContentSignature, error) {
 	phaseStarted := nowFn()
-	phaseBudget := int64(LazyLoadMaxMS)
+	phaseBudget := budgetMS(opDeadlineAt, LazyLoadMaxMS, phaseStarted)
 	if phaseBudget <= 0 {
 		return initial, nil
 	}
@@ -505,6 +516,12 @@ func boundedLazyLoadPipeline(
 		if remain < settleBudget {
 			settleBudget = remain
 		}
+		if opDeadlineAt > 0 {
+			opRemain := opDeadlineAt - nowFn()
+			if opRemain < settleBudget {
+				settleBudget = opRemain
+			}
+		}
 		if settleBudget > 0 {
 			minObs := int64(ReadinessQuietMS)
 			if minObs > settleBudget {
@@ -515,18 +532,19 @@ func boundedLazyLoadPipeline(
 				quiet = settleBudget
 			}
 			next, err := WaitForReadiness(ctx, WaitForReadinessOpts{
-				Sample:             sample,
-				Now:                nowFn,
-				Sleep:              sleepFn,
-				IsQuiet:            tracker.IsQuiet,
-				ThrowIfGuard:       throwIfGuard,
-				DocumentGeneration: docGen,
-				ExpectedGeneration: expected,
-				HasExpectedGen:     true,
-				MaxMS:              settleBudget,
-				MinObserveMS:       minObs,
-				QuietMS:            quiet,
-				SampleMS:           ReadinessSampleMS,
+				Sample:              sample,
+				Now:                 nowFn,
+				Sleep:               sleepFn,
+				IsQuiet:             tracker.IsQuiet,
+				ThrowIfGuard:        throwIfGuard,
+				DocumentGeneration:  docGen,
+				ExpectedGeneration:  expected,
+				HasExpectedGen:      true,
+				MaxMS:               settleBudget,
+				MinObserveMS:        minObs,
+				QuietMS:             quiet,
+				SampleMS:            ReadinessSampleMS,
+				OperationDeadlineAt: opDeadlineAt,
 			})
 			if err != nil {
 				return sig, err
