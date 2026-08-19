@@ -14,6 +14,7 @@ import (
 type Config struct {
 	Token          string
 	Sources        map[string]search.Searcher
+	XSearch        *search.XSearch
 	CloakDisabled  bool
 	CDPEndpoint    string
 	CDPAPIKey      string
@@ -27,6 +28,7 @@ type Config struct {
 type Server struct {
 	token   string
 	sources map[string]search.Searcher
+	xsearch *search.XSearch
 	fetch   *fetch.Service
 	mux     *http.ServeMux
 }
@@ -39,6 +41,7 @@ func New(cfg Config) http.Handler {
 	s := &Server{
 		token:   cfg.Token,
 		sources: sources,
+		xsearch: cfg.XSearch,
 		fetch: fetch.NewService(fetch.ServiceConfig{
 			CloakDisabled:  cfg.CloakDisabled,
 			CDPEndpoint:    cfg.CDPEndpoint,
@@ -53,6 +56,7 @@ func New(cfg Config) http.Handler {
 	}
 	s.mux.HandleFunc("POST /v1/search", s.handleSearch)
 	s.mux.HandleFunc("POST /v1/fetch", s.handleFetch)
+	s.mux.HandleFunc("POST /v1/x_search", s.handleXSearch)
 	return s
 }
 
@@ -61,9 +65,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type searchRequest struct {
+	Query             string               `json:"query"`
+	Limit             *int                 `json:"limit"`
+	Provider          any                  `json:"provider"`
+	SearchContextSize any                  `json:"search_context_size"`
+	AllowedDomains    []string             `json:"allowed_domains"`
+	UserLocation      *search.UserLocation `json:"user_location"`
+}
+
+type xSearchRequest struct {
 	Query    string `json:"query"`
-	Limit    *int   `json:"limit"`
-	Provider any    `json:"provider"`
+	FromDate string `json:"from_date"`
+	ToDate   string `json:"to_date"`
 }
 
 type fetchRequest struct {
@@ -109,8 +122,20 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	ctxSize, cerr := search.ParseSearchContextSize(req.SearchContextSize)
+	if cerr != nil {
+		writeSearchError(w, cerr)
+		return
+	}
 
-	result, winner, err := search.SearchChain(r.Context(), s.sources, plan.Chain, query, limit, plan.SkipMissing)
+	searchReq := search.Request{
+		Query:             query,
+		Limit:             limit,
+		SearchContextSize: ctxSize,
+		AllowedDomains:    req.AllowedDomains,
+		UserLocation:      req.UserLocation,
+	}
+	result, winner, err := search.SearchChain(r.Context(), s.sources, plan.Chain, searchReq, plan.SkipMissing)
 	if err != nil {
 		writeSearchError(w, err)
 		return
@@ -120,6 +145,46 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		"answer":   result.Answer,
 		"sources":  result.Sources,
 		"provider": winner,
+	})
+}
+
+func (s *Server) handleXSearch(w http.ResponseWriter, r *http.Request) {
+	if !s.authorized(r) {
+		writeError(w, http.StatusUnauthorized, "auth_failed", "missing or invalid bearer token")
+		return
+	}
+	var req xSearchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_input", "request body must be JSON")
+		return
+	}
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		writeError(w, http.StatusBadRequest, "invalid_input", "query is required")
+		return
+	}
+	if s.xsearch == nil {
+		writeSearchError(w, search.NewError(search.CodeMissingConfig, "x_search is not configured"))
+		return
+	}
+	result, err := s.xsearch.Search(r.Context(), search.XSearchRequest{
+		Query:    query,
+		FromDate: req.FromDate,
+		ToDate:   req.ToDate,
+	})
+	if err != nil {
+		var se *search.Error
+		if errors.As(err, &se) {
+			writeSearchError(w, se)
+			return
+		}
+		writeError(w, http.StatusBadGateway, "backend_error", "search backend request failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"answer":   result.Answer,
+		"sources":  result.Sources,
+		"provider": "xai",
 	})
 }
 

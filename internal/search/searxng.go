@@ -26,7 +26,9 @@ type searxngResponse struct {
 	} `json:"results"`
 }
 
-func (s SearXNG) Search(ctx context.Context, query string, limit int) (Result, error) {
+func (s SearXNG) Search(ctx context.Context, req Request) (Result, error) {
+	query := req.Query
+	limit := req.Limit
 	base := strings.TrimRight(s.BaseURL, "/")
 	if base == "" {
 		return Result{}, NewError(CodeMissingConfig, "searxng is not configured")
@@ -40,20 +42,20 @@ func (s SearXNG) Search(ctx context.Context, query string, limit int) (Result, e
 	q.Set("format", "json")
 	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return Result{}, NewError(CodeBackendError, "searxng request failed")
 	}
-	req.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
 	for k, v := range s.Headers {
-		req.Header.Set(k, v)
+		httpReq.Header.Set(k, v)
 	}
 
 	client := s.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: defaultTimeout}
 	}
-	resp, err := client.Do(req)
+	resp, err := client.Do(httpReq)
 	if err != nil {
 		// Leave transport/context errors untyped so Classify can map them.
 		return Result{}, err

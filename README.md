@@ -39,10 +39,20 @@ Go service. Local-first. Cloudflare free (Worker hop, Tunnel) is optional.
 
 ```sh
 export WEBGATE_TOKEN=dev-token
-export SEARXNG_BASE_URL=http://127.0.0.1:8080   # needed for provider searxng / auto
-export CDP_ENDPOINT=ws://cloak-manager:9222/devtools/browser/...   # no localhost default
-# export CDP_API_KEY=...          # optional, env only
-# export WEBGATE_CLOAK_DISABLED=1 # fetch returns cloak_disabled; search still works
+export SEARXNG_BASE_URL=http://127.0.0.1:8080   # provider searxng / auto
+export CDP_ENDPOINT=ws://cloak-manager:9222/devtools/browser/...
+# export CDP_API_KEY=...
+# export WEBGATE_CLOAK_DISABLED=1
+
+# Hosted web_search (CLIProxy / compatible Responses). Secrets stay in env.
+export OPENAI_BASE_URL=https://proxy.example/v1
+export OPENAI_API_KEY=...
+export OPENAI_MODEL=gpt-4.1
+export XAI_BASE_URL=https://proxy.example/v1
+export XAI_API_KEY=...
+export XAI_MODEL=grok-4
+# Official https://api.x.ai (and *.api.x.ai) is rejected — use a proxy route.
+
 go run ./cmd/webgate
 ```
 
@@ -50,35 +60,43 @@ go run ./cmd/webgate
 
 `Authorization: Bearer` and JSON body. Optional `limit` 1–20.
 
-With only `SEARXNG_BASE_URL` set (current `main.go`), send `provider: "searxng"` or `"auto"`:
-
 ```json
-{"query":"...","provider":"searxng"}
+{
+  "query": "...",
+  "provider": "llm",
+  "search_context_size": "high",
+  "allowed_domains": ["example.com"],
+  "user_location": {"country": "CN", "city": "Shanghai"}
+}
 ```
-
-Omitted/`"llm"` resolves to `openai` then `xai`, but those HTTP clients are not wired yet — so omitted/`llm` returns `missing_config` until a later ticket. `"auto"` works today because it can use SearXNG and skip unset OpenAI/xAI.
 
 `provider` resolution:
 
-- omitted or `"llm"` → sequential `openai` then `xai` (unconfigured sources skipped; needs OpenAI/xAI later)
-- `"auto"` → `searxng` then `openai` then `xai` (unconfigured skipped)
-- `"searxng"` | `"openai"` | `"xai"` → that source only (no fallback; missing → `missing_config`)
-- `"google"`, `"all"`, arrays, and unknown names → `invalid_input`
+- omitted or `"llm"` → sequential `openai` then `xai` (unconfigured skipped)
+- `"auto"` → `searxng` then `openai` then `xai`
+- `"searxng"` | `"openai"` | `"xai"` → that source only (no fallback)
+- `"google"`, `"all"`, arrays → `invalid_input`
+
+Extra fields: `search_context_size` (`low`|`medium`|`high`, OpenAI default high); `allowed_domains`; `user_location` (country only if two-letter ISO code — names like `"China"` are dropped). xAI ignores context size / location and rejects >5 allowed domains.
+
+### X search — `POST /v1/x_search`
+
+Uses `XAI_*` config. Never falls back to `web_search`. Official `api.x.ai` → `missing_config`.
+
+```json
+{"query":"...","from_date":"2024-01-01","to_date":"2024-01-31"}
+```
+
+Dates optional `YYYY-MM-DD`; reversed or invalid calendar → `invalid_input`. Success requires assistant text plus `x_search_call` or an X/Twitter citation URL.
 
 ### Fetch — `POST /v1/fetch`
 
-Acquires one URL via CDP Attach to the **server-configured** Cloak profile (background tab). Clients never send `profile`.
+Acquires one URL via CDP Attach to the **server-configured** Cloak profile. Clients never send `profile`.
 
 ```json
 {"url":"https://example.com","mode":"readable","kernel":"defuddle"}
 ```
 
-- `url` required (http/https only; local/private/metadata blocked)
-- `mode` omitted → `readable`; `raw` returns captured HTML (same acquire path)
-- `kernel` omitted → `defuddle`; chain falls back per host web-access rules (`html-extractor`, then `llm` when configured)
-- `WEBGATE_CLOAK_DISABLED` → `cloak_disabled` (503); missing `CDP_ENDPOINT` (and no injected capturer) → `missing_config`
-- Inline content default 30_000 chars (cap 200_000) with truncation notice; no tail retrieval
-
 ## Status
 
-#4: `POST /v1/fetch` via CDP Attach + kernel fallback. Hosted LLM search HTTP and compose are later tickets.
+#5: OpenAI / xAI `web_search` sources + `POST /v1/x_search`. List-merge and compose are later tickets.

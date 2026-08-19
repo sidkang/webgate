@@ -24,7 +24,6 @@ func main() {
 	if base := os.Getenv("SEARXNG_BASE_URL"); base != "" {
 		sources[search.SourceSearXNG] = search.SearXNG{BaseURL: base}
 	}
-	// OpenAI / xAI HTTP clients are wired in a later ticket.
 
 	cfg := server.Config{
 		Token:         token,
@@ -32,6 +31,14 @@ func main() {
 		CloakDisabled: envTruthy("WEBGATE_CLOAK_DISABLED"),
 		CDPEndpoint:   strings.TrimSpace(os.Getenv("CDP_ENDPOINT")),
 		CDPAPIKey:     strings.TrimSpace(os.Getenv("CDP_API_KEY")),
+	}
+
+	if openai := openAIFromEnv(); openai != nil {
+		sources[search.SourceOpenAI] = *openai
+	}
+	if xai := xaiFromEnv(); xai != nil {
+		sources[search.SourceXAI] = *xai
+		cfg.XSearch = &search.XSearch{Client: xai.Client, Model: xai.Model}
 	}
 
 	log.Printf("webgate listening on %s", addr)
@@ -43,4 +50,34 @@ func main() {
 func envTruthy(key string) bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
 	return v == "1" || v == "true" || v == "yes"
+}
+
+func openAIFromEnv() *search.OpenAI {
+	base := strings.TrimSpace(os.Getenv("OPENAI_BASE_URL"))
+	key := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+	model := strings.TrimSpace(os.Getenv("OPENAI_MODEL"))
+	if base == "" || model == "" || key == "" {
+		return nil
+	}
+	return &search.OpenAI{
+		Client: &search.ResponsesClient{BaseURL: base, APIKey: key},
+		Model:  model,
+	}
+}
+
+func xaiFromEnv() *search.XAI {
+	base := strings.TrimSpace(os.Getenv("XAI_BASE_URL"))
+	key := strings.TrimSpace(os.Getenv("XAI_API_KEY"))
+	model := strings.TrimSpace(os.Getenv("XAI_MODEL"))
+	if base == "" || model == "" || key == "" {
+		return nil
+	}
+	if err := search.RejectOfficialXAIBaseURL(base); err != nil {
+		log.Printf("XAI_BASE_URL rejected (official api.x.ai): not registering xai / x_search")
+		return nil
+	}
+	return &search.XAI{
+		Client: &search.ResponsesClient{BaseURL: base, APIKey: key},
+		Model:  model,
+	}
 }

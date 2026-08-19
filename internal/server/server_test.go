@@ -61,7 +61,7 @@ func (c *callRecorder) track(name string, next search.Searcher) search.Searcher 
 		c.mu.Lock()
 		c.order = append(c.order, name)
 		c.mu.Unlock()
-		return next.Search(context.Background(), query, limit)
+		return next.Search(context.Background(), search.Request{Query: query, Limit: limit})
 	})
 }
 
