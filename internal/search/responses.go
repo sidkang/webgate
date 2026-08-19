@@ -1,22 +1,26 @@
 package search
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
 	"time"
+
+	openai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/packages/param"
+	"github.com/openai/openai-go/v3/responses"
 )
 
 const (
-	SourceTimeout      = 60 * time.Second
-	maxRawResponseBytes = 1024 * 1024
-	maxBackendErrChars  = 1000
+	SourceTimeout         = 60 * time.Second
+	maxRawResponseBytes   = 1024 * 1024
+	maxBackendErrChars    = 1000
 	WebSearchInstructions = "Search the web and answer only from the retrieved results. Cite sources."
 	XSearchInstructions   = "Search X and answer only from retrieved X posts. Cite X URLs."
 	XAIMaxAllowedDomains  = 5
@@ -30,19 +34,29 @@ type BackendResponse struct {
 	OutputItems  []any
 }
 
-// ResponsesClient POSTs to an OpenAI-compatible /responses endpoint.
+// ResponsesClient POSTs to an OpenAI-compatible /responses endpoint via openai-go.
 type ResponsesClient struct {
 	BaseURL    string
 	APIKey     string
 	HTTPClient *http.Client
 }
 
-func ResponsesURL(baseURL string) string {
+// ResponsesBaseURL returns the SDK root (origin or …/v1), never ending in /responses.
+func ResponsesBaseURL(baseURL string) string {
 	normalized := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if strings.HasSuffix(normalized, "/responses") {
-		return normalized
+		return strings.TrimSuffix(normalized, "/responses")
 	}
-	return normalized + "/responses"
+	return normalized
+}
+
+// ResponsesURL is the full /responses endpoint (diagnostics / legacy).
+func ResponsesURL(baseURL string) string {
+	base := ResponsesBaseURL(baseURL)
+	if base == "" {
+		return "/responses"
+	}
+	return base + "/responses"
 }
 
 // IsOfficialXAIHostname reports official xAI hosts that must be rejected.
@@ -207,7 +221,19 @@ func (c *ResponsesClient) client() *http.Client {
 	return &http.Client{Timeout: SourceTimeout}
 }
 
-// Post sends a Responses body and normalizes the JSON result.
+func (c *ResponsesClient) sdkClient() openai.Client {
+	opts := []option.RequestOption{
+		option.WithBaseURL(ResponsesBaseURL(c.BaseURL)),
+		option.WithHTTPClient(c.client()),
+		option.WithMaxRetries(0),
+	}
+	if c.APIKey != "" {
+		opts = append(opts, option.WithAPIKey(c.APIKey))
+	}
+	return openai.NewClient(opts...)
+}
+
+// Post sends a Responses body (host-faithful JSON) via openai-go and normalizes the result.
 func (c *ResponsesClient) Post(ctx context.Context, body map[string]any, limit int) (BackendResponse, error) {
 	if err := RejectOfficialXAIBaseURL(c.BaseURL); err != nil {
 		return BackendResponse{}, err
@@ -216,37 +242,46 @@ func (c *ResponsesClient) Post(ctx context.Context, body map[string]any, limit i
 	if err != nil {
 		return BackendResponse{}, NewError(CodeBackendError, "failed to encode request")
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ResponsesURL(c.BaseURL), bytes.NewReader(payload))
-	if err != nil {
-		return BackendResponse{}, NewError(CodeBackendError, "failed to build request")
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-	}
 
-	resp, err := c.client().Do(req)
+	cli := c.sdkClient()
+	resp, err := cli.Responses.New(ctx, param.Override[responses.ResponseNewParams](json.RawMessage(payload)))
 	if err != nil {
-		if ctx.Err() != nil {
-			return BackendResponse{}, err
-		}
-		return BackendResponse{}, NewError(CodeBackendError, "responses request failed")
+		return BackendResponse{}, mapSDKError(err, c.APIKey)
 	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxRawResponseBytes+1))
-	if err != nil {
-		return BackendResponse{}, NewError(CodeBackendError, "responses read failed")
+	if resp == nil {
+		return BackendResponse{}, NewError(CodeInvalidResponse, "web search backend returned empty response")
 	}
+	raw := resp.RawJSON()
 	if len(raw) > maxRawResponseBytes {
 		return BackendResponse{}, NewError(CodeInvalidResponse, "responses body too large")
 	}
-	text := string(raw)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		msg := text
+	var decoded any
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return BackendResponse{}, NewError(CodeInvalidResponse, "web search backend returned non-JSON response")
+	}
+	return NormalizeBackendResponse(decoded, limit), nil
+}
+
+func mapSDKError(err error, apiKey string) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+
+	var apiErr *openai.Error
+	if errors.As(err, &apiErr) && apiErr != nil {
+		msg := strings.TrimSpace(apiErr.Message)
+		if msg == "" {
+			msg = strings.TrimSpace(apiErr.RawJSON())
+		}
+		if msg == "" {
+			msg = apiErr.Error()
+		}
+		// Prefer nested error.message when RawJSON is the full envelope.
 		var parsed map[string]any
-		if json.Unmarshal(raw, &parsed) == nil {
+		if json.Unmarshal([]byte(apiErr.RawJSON()), &parsed) == nil {
 			if errObj, ok := parsed["error"].(map[string]any); ok {
 				if m, ok := errObj["message"].(string); ok && strings.TrimSpace(m) != "" {
 					msg = m
@@ -255,19 +290,19 @@ func (c *ResponsesClient) Post(ctx context.Context, body map[string]any, limit i
 				msg = m
 			}
 		}
-		msg = redactSecrets(msg, c.APIKey)
+		msg = redactSecrets(msg, apiKey)
 		if len(msg) > maxBackendErrChars {
 			msg = msg[:maxBackendErrChars]
 		}
-		code := errorCodeForHTTPStatus(resp.StatusCode, msg)
-		return BackendResponse{}, &Error{Code: code, Message: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, msg)}
+		code := errorCodeForHTTPStatus(apiErr.StatusCode, msg)
+		return &Error{Code: code, Message: fmt.Sprintf("HTTP %d: %s", apiErr.StatusCode, msg)}
 	}
 
-	var decoded any
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return BackendResponse{}, NewError(CodeInvalidResponse, "web search backend returned non-JSON response")
+	classified := Classify(err)
+	if classified.Code == CodeTimeout || classified.Code == CodeAborted {
+		return err
 	}
-	return NormalizeBackendResponse(decoded, limit), nil
+	return NewError(CodeBackendError, "responses request failed")
 }
 
 func redactSecrets(text, apiKey string) string {

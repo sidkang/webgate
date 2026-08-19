@@ -44,7 +44,8 @@ export CDP_ENDPOINT=ws://…/devtools/browser/...   # launched Cloak profile
 # export CDP_API_KEY=...
 # export WEBGATE_CLOAK_DISABLED=1
 
-# Hosted web_search (CLIProxy / compatible Responses). Secrets stay in env.
+# Hosted web_search via official openai-go Responses client (custom base URL for CLIProxy).
+# Secrets stay in env.
 export OPENAI_BASE_URL=https://proxy.example/v1
 export OPENAI_API_KEY=...
 export OPENAI_MODEL=gpt-4.1
@@ -136,7 +137,7 @@ Dates optional `YYYY-MM-DD`; reversed or invalid calendar → `invalid_input`. S
 
 ### Fetch — `POST /v1/fetch`
 
-Acquires one URL via CDP Attach to the **server-configured** Cloak profile. Clients never send `profile`.
+Acquires one URL via CDP Attach to the **server-configured** Cloak profile. Clients never send `profile`. After navigate, fetch waits for **network-quiet** (Document/XHR/Fetch/Script) plus **DOM signature stability** using host timings, then a bounded lazy-load scroll settle — same pipeline as the reference web-access CDP capturer.
 
 ```json
 {"url":"https://example.com","mode":"readable","kernel":"defuddle"}
@@ -144,4 +145,4 @@ Acquires one URL via CDP Attach to the **server-configured** Cloak profile. Clie
 
 ## Status
 
-#7: Compose stack — webgate + SearXNG (Google CDP) + optional Cloak Manager.
+# follow-up: CDP network-quiet + DOM readiness; LLM search uses official openai-go Responses client (`WithBaseURL` for CLIProxy).

@@ -15,9 +15,37 @@ import (
 
 func fakeResponses(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *search.ResponsesClient) {
 	t.Helper()
-	srv := httptest.NewServer(handler)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// openai-go requires application/json Content-Type on success/error bodies.
+		if r.URL.Path != "/responses" && r.URL.Path != "/v1/responses" {
+			http.NotFound(w, r)
+			return
+		}
+		handler(&jsonContentType{ResponseWriter: w}, r)
+	}))
 	t.Cleanup(srv.Close)
 	return srv, &search.ResponsesClient{BaseURL: srv.URL, APIKey: "test-key", HTTPClient: srv.Client()}
+}
+
+// jsonContentType forces application/json so openai-go can decode fake Responses replies.
+type jsonContentType struct {
+	http.ResponseWriter
+	wrote bool
+}
+
+func (j *jsonContentType) WriteHeader(code int) {
+	if !j.wrote {
+		j.Header().Set("Content-Type", "application/json")
+		j.wrote = true
+	}
+	j.ResponseWriter.WriteHeader(code)
+}
+
+func (j *jsonContentType) Write(b []byte) (int, error) {
+	if !j.wrote {
+		j.WriteHeader(http.StatusOK)
+	}
+	return j.ResponseWriter.Write(b)
 }
 
 func successWebBody(answer, url string) map[string]any {
