@@ -39,6 +39,18 @@ services:
       CDP_ENDPOINT: ${CDP_ENDPOINT:-}
       CDP_API_KEY: ${CDP_API_KEY:-}
       SEARXNG_BASE_URL: ${SEARXNG_PUBLIC_BASE_URL:-http://localhost:8080/}
+      MIN_INTERVAL_MS: ${MIN_INTERVAL_MS:-}
+      MAX_PAGE: ${MAX_PAGE:-}
+      GOTO_TIMEOUT_MS: ${GOTO_TIMEOUT_MS:-}
+      WAIT_SELECTOR_TIMEOUT_MS: ${WAIT_SELECTOR_TIMEOUT_MS:-}
+      CAPTCHA_RETRIES: ${CAPTCHA_RETRIES:-}
+      FAILURE_CACHE_S: ${FAILURE_CACHE_S:-}
+      GOOGLE_HL: ${GOOGLE_HL:-}
+      GOOGLE_GL: ${GOOGLE_GL:-}
+      GOOGLE_UDM: ${GOOGLE_UDM:-}
+      GOOGLE_SAFE: ${GOOGLE_SAFE:-}
+      GOOGLE_PWS: ${GOOGLE_PWS:-}
+      GOOGLE_AS_EQ: ${GOOGLE_AS_EQ:-}
     volumes:
       - ./deploy/searxng/config:/etc/searxng
       - ./deploy/searxng/data:/var/cache/searxng

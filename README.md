@@ -81,8 +81,8 @@ docker compose --profile cloak up -d --build
 ### First-run with Cloak fetch / SearXNG `!g`
 
 1. Start the stack (with `--profile cloak` if you need a local Manager).
-2. Open Manager (`http://127.0.0.1:8081`), create/launch a profile.
-3. Copy that profile’s CDP URL into `.env` as `CDP_ENDPOINT` (and `CDP_API_KEY` if required). Typical Manager form: `/api/profiles/<id>/cdp`. Compose cannot invent this URL — the operator sets it after launch.
+2. Open Manager from the host (`http://127.0.0.1:8081`), create/launch a profile.
+3. Set `CDP_ENDPOINT` in `.env` (and `CDP_API_KEY` if required) to that profile’s CDP URL. From the **compose network**, use the Manager service hostname and **container** port, e.g. `http://cloak-manager:8080/api/profiles/<id>/cdp` — not `127.0.0.1:8081` (that address is only for the host browser). Compose cannot invent this URL; the operator sets it after launch.
 4. `docker compose up -d` again so **webgate** and **searxng** both see the same `CDP_ENDPOINT` / `CDP_API_KEY`.
 5. webgate **does not** call Manager to launch profiles. Google stays **inside SearXNG** (`!g` / `google-cdp` engine). There is no webgate `provider: google`.
 

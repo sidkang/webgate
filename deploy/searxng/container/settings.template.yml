@@ -11,6 +11,12 @@ server:
 valkey:
   url: false
 
+# webgate calls GET /search?format=json; official default is html-only (403).
+search:
+  formats:
+    - html
+    - json
+
 engines:
   - name: google-cdp
     engine: json_engine
