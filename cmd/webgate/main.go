@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/sidkang/webgate/internal/search"
 	"github.com/sidkang/webgate/internal/server"
@@ -25,10 +26,21 @@ func main() {
 	}
 	// OpenAI / xAI HTTP clients are wired in a later ticket.
 
-	cfg := server.Config{Token: token, Sources: sources}
+	cfg := server.Config{
+		Token:         token,
+		Sources:       sources,
+		CloakDisabled: envTruthy("WEBGATE_CLOAK_DISABLED"),
+		CDPEndpoint:   strings.TrimSpace(os.Getenv("CDP_ENDPOINT")),
+		CDPAPIKey:     strings.TrimSpace(os.Getenv("CDP_API_KEY")),
+	}
 
 	log.Printf("webgate listening on %s", addr)
 	if err := http.ListenAndServe(addr, server.New(cfg)); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func envTruthy(key string) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	return v == "1" || v == "true" || v == "yes"
 }
