@@ -327,6 +327,79 @@ func TestXSearchRequiresXEvidence(t *testing.T) {
 	}
 }
 
+func TestXSearchScrapedXURLIsInvalidResponse(t *testing.T) {
+	_, client := fakeResponses(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output_text": "See https://x.com/user/status/1",
+			"output":      []any{map[string]any{"type": "message"}},
+		})
+	})
+	h := server.New(server.Config{
+		Token:   testToken,
+		XSearch: &search.XSearch{Client: client, Model: "grok"},
+	})
+	rec := postXSearch(t, h, testToken, map[string]any{"query": "q"})
+	if decode(t, rec)["code"] != "invalid_response" {
+		t.Fatalf("scraped-only body=%s", rec.Body.String())
+	}
+}
+
+func TestXSearchStructuredCitationSucceeds(t *testing.T) {
+	_, client := fakeResponses(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output": []any{
+				map[string]any{
+					"type": "message",
+					"content": []any{
+						map[string]any{
+							"type": "output_text",
+							"text": "from a post",
+							"annotations": []any{
+								map[string]any{
+									"type":  "url_citation",
+									"url":   "https://x.com/user/status/1",
+									"title": "post",
+								},
+							},
+						},
+					},
+				},
+			},
+		})
+	})
+	h := server.New(server.Config{
+		Token:   testToken,
+		XSearch: &search.XSearch{Client: client, Model: "grok"},
+	})
+	rec := postXSearch(t, h, testToken, map[string]any{"query": "q"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("body=%s", rec.Body.String())
+	}
+	if decode(t, rec)["answer"] != "from a post" {
+		t.Fatalf("body=%s", rec.Body.String())
+	}
+}
+
+func TestXSearchCitationsArraySucceeds(t *testing.T) {
+	_, client := fakeResponses(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output_text": "from citations array",
+			"citations": []any{
+				map[string]any{"url": "https://twitter.com/user/status/2", "title": "t"},
+			},
+			"output": []any{},
+		})
+	})
+	h := server.New(server.Config{
+		Token:   testToken,
+		XSearch: &search.XSearch{Client: client, Model: "grok"},
+	})
+	rec := postXSearch(t, h, testToken, map[string]any{"query": "q"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("body=%s", rec.Body.String())
+	}
+}
+
 func TestXSearchSuccessWithCall(t *testing.T) {
 	var got map[string]any
 	_, client := fakeResponses(t, func(w http.ResponseWriter, r *http.Request) {

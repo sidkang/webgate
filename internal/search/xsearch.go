@@ -99,6 +99,8 @@ func hasXSearchCall(resp BackendResponse) bool {
 }
 
 func hasXCitation(resp BackendResponse) bool {
+	// Host structuredCitationUrls: citationUrls / citations only — never Sources
+	// scraped from answer markdown/bare links.
 	check := func(u string) bool {
 		parsed, err := url.Parse(u)
 		if err != nil {
@@ -111,15 +113,11 @@ func hasXCitation(resp BackendResponse) bool {
 			return true
 		}
 	}
-	for _, s := range resp.Sources {
-		if check(s.URL) {
-			return true
-		}
-	}
 	return false
 }
 
-// IsXSearchSuccess requires trimmed answer and X evidence (call or X/Twitter citation).
+// IsXSearchSuccess requires trimmed answer and X evidence:
+// x_search_call in output items, or a structured citation URL on an X/Twitter host.
 func IsXSearchSuccess(resp BackendResponse) bool {
 	return strings.TrimSpace(resp.Answer) != "" && (hasXSearchCall(resp) || hasXCitation(resp))
 }

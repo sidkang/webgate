@@ -173,12 +173,8 @@ func (s *Server) handleXSearch(w http.ResponseWriter, r *http.Request) {
 		ToDate:   req.ToDate,
 	})
 	if err != nil {
-		var se *search.Error
-		if errors.As(err, &se) {
-			writeSearchError(w, se)
-			return
-		}
-		writeError(w, http.StatusBadGateway, "backend_error", "search backend request failed")
+		classified := search.Classify(err)
+		writeSearchError(w, search.NewError(classified.Code, classified.Message))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
