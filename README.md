@@ -33,8 +33,18 @@ Pins are **static config** (profile id). No runtime failover.
 
 ## Stack
 
-Go / TypeScript / Python. Local-first. Cloudflare free (Worker hop, Tunnel) is optional.
+Go service. Local-first. Cloudflare free (Worker hop, Tunnel) is optional.
+
+## Run (ticket #2)
+
+```sh
+export WEBGATE_TOKEN=dev-token
+export SEARXNG_BASE_URL=http://127.0.0.1:8080
+go run ./cmd/webgate
+```
+
+`POST /v1/search` with `Authorization: Bearer` and `{"query":"...","provider":"searxng"}`. Optional `limit` 1–20.
 
 ## Status
 
-Scaffold only. Interfaces and adapters not implemented.
+#2 in progress: Bearer auth + SearXNG search. Fetch, hosted LLM search, and compose are later tickets.
