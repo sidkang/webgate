@@ -1,0 +1,16 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+*.log
+.cache/
+tmp/
+dist/
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+/bin/
+/target/
+.idea/
+.vscode/
