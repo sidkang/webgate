@@ -3,7 +3,6 @@ package search
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -30,11 +29,11 @@ type searxngResponse struct {
 func (s SearXNG) Search(ctx context.Context, query string, limit int) (Result, error) {
 	base := strings.TrimRight(s.BaseURL, "/")
 	if base == "" {
-		return Result{}, fmt.Errorf("searxng base URL is empty")
+		return Result{}, NewError(CodeMissingConfig, "searxng is not configured")
 	}
 	u, err := url.Parse(base + "/search")
 	if err != nil {
-		return Result{}, err
+		return Result{}, NewError(CodeBackendError, "searxng request failed")
 	}
 	q := u.Query()
 	q.Set("q", query)
@@ -43,7 +42,7 @@ func (s SearXNG) Search(ctx context.Context, query string, limit int) (Result, e
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return Result{}, err
+		return Result{}, NewError(CodeBackendError, "searxng request failed")
 	}
 	req.Header.Set("Accept", "application/json")
 	for k, v := range s.Headers {
@@ -56,16 +55,17 @@ func (s SearXNG) Search(ctx context.Context, query string, limit int) (Result, e
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		// Leave transport/context errors untyped so Classify can map them.
 		return Result{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Result{}, fmt.Errorf("searxng returned HTTP %d", resp.StatusCode)
+		return Result{}, searxngHTTPError(resp.StatusCode)
 	}
 
 	var payload searxngResponse
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return Result{}, fmt.Errorf("searxng returned invalid JSON")
+		return Result{}, NewError(CodeInvalidResponse, "searxng returned invalid JSON")
 	}
 
 	var sources []Source
@@ -102,4 +102,15 @@ func (s SearXNG) Search(ctx context.Context, query string, limit int) (Result, e
 	}
 
 	return Result{Answer: strings.Join(parts, "\n\n"), Sources: sources}, nil
+}
+
+func searxngHTTPError(status int) *Error {
+	switch {
+	case status == http.StatusTooManyRequests:
+		return NewError(CodeRateLimited, "searxng rate limited")
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return NewError(CodeAuthFailed, "searxng authentication failed")
+	default:
+		return NewError(CodeBackendError, "searxng request failed")
+	}
 }

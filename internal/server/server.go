@@ -9,18 +9,22 @@ import (
 )
 
 type Config struct {
-	Token    string
-	Searcher search.Searcher
+	Token   string
+	Sources map[string]search.Searcher
 }
 
 type Server struct {
-	token    string
-	searcher search.Searcher
-	mux      *http.ServeMux
+	token   string
+	sources map[string]search.Searcher
+	mux     *http.ServeMux
 }
 
 func New(cfg Config) http.Handler {
-	s := &Server{token: cfg.Token, searcher: cfg.Searcher, mux: http.NewServeMux()}
+	sources := cfg.Sources
+	if sources == nil {
+		sources = map[string]search.Searcher{}
+	}
+	s := &Server{token: cfg.Token, sources: sources, mux: http.NewServeMux()}
 	s.mux.HandleFunc("POST /v1/search", s.handleSearch)
 	return s
 }
@@ -32,7 +36,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type searchRequest struct {
 	Query    string `json:"query"`
 	Limit    *int   `json:"limit"`
-	Provider string `json:"provider"`
+	Provider any    `json:"provider"`
 }
 
 type errorBody struct {
@@ -56,10 +60,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_input", "query is required")
 		return
 	}
-	if req.Provider != "searxng" {
-		writeError(w, http.StatusBadRequest, "invalid_input", "provider must be searxng")
+
+	plan, perr := search.ParseProvider(req.Provider)
+	if perr != nil {
+		writeSearchError(w, perr)
 		return
 	}
+
 	limit := 10
 	if req.Limit != nil {
 		limit = *req.Limit
@@ -68,25 +75,17 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if s.searcher == nil {
-		writeError(w, http.StatusBadRequest, "missing_config", "SearXNG is not configured")
-		return
-	}
 
-	result, err := s.searcher.Search(r.Context(), query, limit)
+	result, winner, err := search.SearchChain(r.Context(), s.sources, plan.Chain, query, limit, plan.SkipMissing)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "backend_error", "searxng request failed")
-		return
-	}
-	if search.IsEmpty(result) {
-		writeError(w, http.StatusBadGateway, "invalid_response", "search returned no answer or sources")
+		writeSearchError(w, err)
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"answer":   result.Answer,
 		"sources":  result.Sources,
-		"provider": "searxng",
+		"provider": winner,
 	})
 }
 
@@ -97,6 +96,63 @@ func (s *Server) authorized(r *http.Request) bool {
 	got := r.Header.Get("Authorization")
 	want := "Bearer " + s.token
 	return got == want
+}
+
+func writeSearchError(w http.ResponseWriter, err *search.Error) {
+	code := err.Code
+	writeError(w, httpStatusFor(code), string(code), publicMessage(code))
+}
+
+func httpStatusFor(code search.Code) int {
+	switch code {
+	case search.CodeInvalidInput,
+		search.CodeMissingConfig,
+		search.CodeUnsupportedModel,
+		search.CodeUnsupportedTool,
+		search.CodeUnsupportedToolChoice:
+		return http.StatusBadRequest
+	case search.CodeRateLimited:
+		return http.StatusTooManyRequests
+	case search.CodeTimeout:
+		return http.StatusGatewayTimeout
+	case search.CodeAborted:
+		return http.StatusInternalServerError
+	case search.CodeAuthFailed:
+		return http.StatusBadGateway
+	case search.CodeInvalidResponse:
+		return http.StatusBadGateway
+	default:
+		return http.StatusBadGateway
+	}
+}
+
+func publicMessage(code search.Code) string {
+	switch code {
+	case search.CodeInvalidInput:
+		return "invalid input"
+	case search.CodeMissingConfig:
+		return "search source is not configured"
+	case search.CodeAuthFailed:
+		return "search authentication failed"
+	case search.CodeBackendError:
+		return "search backend request failed"
+	case search.CodeInvalidResponse:
+		return "search returned no answer or sources"
+	case search.CodeRateLimited:
+		return "search rate limited"
+	case search.CodeTimeout:
+		return "search timed out"
+	case search.CodeAborted:
+		return "search was aborted"
+	case search.CodeUnsupportedModel:
+		return "unsupported model"
+	case search.CodeUnsupportedTool:
+		return "unsupported tool"
+	case search.CodeUnsupportedToolChoice:
+		return "unsupported tool choice"
+	default:
+		return "search failed"
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {

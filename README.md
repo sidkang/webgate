@@ -35,16 +35,25 @@ Pins are **static config** (profile id). No runtime failover.
 
 Go service. Local-first. Cloudflare free (Worker hop, Tunnel) is optional.
 
-## Run (ticket #2)
+## Run
 
 ```sh
 export WEBGATE_TOKEN=dev-token
-export SEARXNG_BASE_URL=http://127.0.0.1:8080
+export SEARXNG_BASE_URL=http://127.0.0.1:8080   # needed for provider searxng / auto
 go run ./cmd/webgate
 ```
 
-`POST /v1/search` with `Authorization: Bearer` and `{"query":"...","provider":"searxng"}`. Optional `limit` 1–20.
+`POST /v1/search` with `Authorization: Bearer` and JSON `{"query":"..."}`. Optional `limit` 1–20.
+
+`provider` resolution:
+
+- omitted or `"llm"` → sequential `openai` then `xai` (unconfigured sources skipped)
+- `"auto"` → `searxng` then `openai` then `xai` (unconfigured skipped)
+- `"searxng"` | `"openai"` | `"xai"` → that source only (no fallback; missing → `missing_config`)
+- `"google"`, `"all"`, arrays, and unknown names → `invalid_input`
+
+OpenAI / xAI HTTP clients are not wired yet; inject them in tests or leave unset so `llm`/`auto` skip those slots. `SEARXNG_BASE_URL` still registers SearXNG for `searxng` / `auto`.
 
 ## Status
 
-#2: Bearer auth + SearXNG search on `POST /v1/search`. Fetch, hosted LLM search, and compose are later tickets.
+#3: provider resolver (`llm` / `auto` / single source) with stop-vs-continue fallback. Fetch, hosted LLM search HTTP, and compose are later tickets.

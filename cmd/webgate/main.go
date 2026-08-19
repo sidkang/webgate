@@ -19,10 +19,13 @@ func main() {
 		log.Fatal("WEBGATE_TOKEN is required")
 	}
 
-	cfg := server.Config{Token: token}
+	sources := map[string]search.Searcher{}
 	if base := os.Getenv("SEARXNG_BASE_URL"); base != "" {
-		cfg.Searcher = search.SearXNG{BaseURL: base}
+		sources[search.SourceSearXNG] = search.SearXNG{BaseURL: base}
 	}
+	// OpenAI / xAI HTTP clients are wired in a later ticket.
+
+	cfg := server.Config{Token: token, Sources: sources}
 
 	log.Printf("webgate listening on %s", addr)
 	if err := http.ListenAndServe(addr, server.New(cfg)); err != nil {
