@@ -95,6 +95,8 @@ docker compose --profile cloak up -d --build
 | External SearXNG | Set `SEARXNG_BASE_URL` to that instance and start webgate without its dependency: `docker compose up -d --build webgate --no-deps`. |
 | Bundled SearXNG without Google CDP | Leave `CDP_ENDPOINT` empty; other SearXNG engines still work; `!g` needs CDP. |
 
+First boot writes `search.formats: [html, json]` so webgate `provider: searxng` can call `GET /search?format=json`. If `deploy/searxng/config/settings.yml` already exists without `json` in `search.formats`, edit it (see `deploy/searxng/README.md`) or SearXNG returns 403.
+
 Validate YAML without bringing the stack up: `docker compose config`.
 
 ### Search — `POST /v1/search`
