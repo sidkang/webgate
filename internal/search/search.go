@@ -1,6 +1,9 @@
 package search
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 type Source struct {
 	Title   string `json:"title"`
@@ -35,8 +38,13 @@ func (f Func) Search(_ context.Context, query string, limit int) (Result, error)
 }
 
 func IsEmpty(r Result) bool {
-	if len(r.Sources) > 0 {
+	if strings.TrimSpace(r.Answer) != "" {
 		return false
 	}
-	return r.Answer == ""
+	for _, src := range r.Sources {
+		if strings.TrimSpace(src.URL) != "" {
+			return false
+		}
+	}
+	return true
 }

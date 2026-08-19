@@ -44,6 +44,9 @@ func TestSearchRequiresBearerToken(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	if decode(t, rec)["code"] != "auth_failed" {
+		t.Fatalf("body=%s", rec.Body.String())
+	}
 }
 
 func TestSearchRejectsWrongToken(t *testing.T) {
@@ -51,6 +54,9 @@ func TestSearchRejectsWrongToken(t *testing.T) {
 	rec := postSearch(t, h, "nope", map[string]any{"query": "go", "provider": "searxng"})
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if decode(t, rec)["code"] != "auth_failed" {
+		t.Fatalf("body=%s", rec.Body.String())
 	}
 }
 
@@ -100,6 +106,20 @@ func TestSearchEmptyShellFails(t *testing.T) {
 	out := decode(t, rec)
 	if out["code"] != "invalid_response" {
 		t.Fatalf("code=%v body=%s", out["code"], rec.Body.String())
+	}
+}
+
+func TestSearchSourceWithoutURLIsEmpty(t *testing.T) {
+	h := server.New(server.Config{
+		Token: testToken,
+		Searcher: search.Fixed{Result: search.Result{
+			Sources: []search.Source{{Title: "no url", Snippet: "x"}},
+		}},
+	})
+	rec := postSearch(t, h, testToken, map[string]any{"query": "nothing", "provider": "searxng"})
+	out := decode(t, rec)
+	if rec.Code == http.StatusOK || out["code"] != "invalid_response" {
+		t.Fatalf("status=%d code=%v body=%s", rec.Code, out["code"], rec.Body.String())
 	}
 }
 

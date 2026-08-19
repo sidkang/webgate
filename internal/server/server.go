@@ -75,7 +75,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 
 	result, err := s.searcher.Search(r.Context(), query, limit)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "backend_error", err.Error())
+		writeError(w, http.StatusBadGateway, "backend_error", "searxng request failed")
 		return
 	}
 	if search.IsEmpty(result) {

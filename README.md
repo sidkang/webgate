@@ -47,4 +47,4 @@ go run ./cmd/webgate
 
 ## Status
 
-#2 in progress: Bearer auth + SearXNG search. Fetch, hosted LLM search, and compose are later tickets.
+#2: Bearer auth + SearXNG search on `POST /v1/search`. Fetch, hosted LLM search, and compose are later tickets.
