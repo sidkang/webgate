@@ -1,0 +1,28 @@
+# Merge into an existing /etc/searxng/settings.yml (webgate compose unit).
+# The image's generated settings.yml already includes these values.
+
+server:
+  limiter: false
+
+# This single-container deployment does not run Redis or Valkey.
+valkey:
+  url: false
+
+engines:
+  - name: google-cdp
+    engine: json_engine
+    shortcut: g
+    search_url: http://127.0.0.1:3100/google?q={query}&limit=10&pageno={pageno}
+    enable_http: true
+    results_query: results
+    url_query: url
+    title_query: title
+    content_query: content
+    categories: [general]
+    timeout: 25.0
+    paging: true
+    disabled: false
+
+  - name: google
+    engine: google
+    disabled: true

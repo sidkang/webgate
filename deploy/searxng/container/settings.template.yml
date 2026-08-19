@@ -1,0 +1,32 @@
+# Generated on first startup when /etc/searxng/settings.yml is absent.
+# webgate compose SearXNG unit — remainder comes from SearXNG defaults.
+use_default_settings: true
+
+server:
+  secret_key: "ultrasecretkey"
+  image_proxy: true
+  limiter: false
+
+# This image is intentionally single-container: no Redis or Valkey service.
+valkey:
+  url: false
+
+engines:
+  - name: google-cdp
+    engine: json_engine
+    shortcut: g
+    search_url: http://127.0.0.1:3100/google?q={query}&limit=10&pageno={pageno}
+    enable_http: true
+    results_query: results
+    url_query: url
+    title_query: title
+    content_query: content
+    categories: [general]
+    timeout: 25.0
+    paging: true
+    disabled: false
+
+  # Avoid a second direct Google request for each SearXNG search.
+  - name: google
+    engine: google
+    disabled: true

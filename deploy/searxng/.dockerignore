@@ -1,0 +1,13 @@
+.git/
+.jj/
+.venv
+.env
+.env.*
+.pytest_cache/
+__pycache__/
+*.py[cod]
+tests/
+scripts/
+AGENTS.md
+mise.toml
+.DS_Store

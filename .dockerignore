@@ -1,8 +1,10 @@
-.DS_Store
+# Built context for the webgate image (repo root).
+.git/
+.jj/
 .env
 .env.*
 !.env.example
-*.log
+.DS_Store
 .cache/
 tmp/
 dist/
@@ -10,9 +12,11 @@ node_modules/
 .venv/
 __pycache__/
 *.pyc
-/bin/
-/target/
+*.log
 .idea/
 .vscode/
 deploy/searxng/config/
 deploy/searxng/data/
+docs/
+AGENTS.md
+**/*_test.go

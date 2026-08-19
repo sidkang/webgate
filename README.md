@@ -35,12 +35,12 @@ Pins are **static config** (profile id). No runtime failover.
 
 Go service. Local-first. Cloudflare free (Worker hop, Tunnel) is optional.
 
-## Run
+## Run (local Go)
 
 ```sh
 export WEBGATE_TOKEN=dev-token
 export SEARXNG_BASE_URL=http://127.0.0.1:8080   # provider searxng / auto
-export CDP_ENDPOINT=ws://cloak-manager:9222/devtools/browser/...
+export CDP_ENDPOINT=ws://…/devtools/browser/...   # launched Cloak profile
 # export CDP_API_KEY=...
 # export WEBGATE_CLOAK_DISABLED=1
 
@@ -55,6 +55,47 @@ export XAI_MODEL=grok-4
 
 go run ./cmd/webgate
 ```
+
+Listens on `WEBGATE_ADDR` (default `:8787`, all interfaces). Clients send
+`Authorization: Bearer $WEBGATE_TOKEN`.
+
+## Compose (webgate + SearXNG + optional Cloak Manager)
+
+`compose.yaml` runs **webgate** and a bundled **SearXNG** unit that includes a
+Google-via-CDP engine. CloakBrowser-Manager is optional (`--profile cloak`).
+
+Secrets stay in `.env` (see `.env.example`). Never commit real tokens.
+
+```sh
+cp .env.example .env
+# set WEBGATE_TOKEN=…
+mkdir -p deploy/searxng/config deploy/searxng/data
+
+# Default: webgate (:8787) + SearXNG (:8080)
+docker compose up -d --build
+
+# Also start Cloak Manager on :8081 (profile data in a named volume)
+docker compose --profile cloak up -d --build
+```
+
+### First-run with Cloak fetch / SearXNG `!g`
+
+1. Start the stack (with `--profile cloak` if you need a local Manager).
+2. Open Manager (`http://127.0.0.1:8081`), create/launch a profile.
+3. Copy that profile’s CDP URL into `.env` as `CDP_ENDPOINT` (and `CDP_API_KEY` if required). Typical Manager form: `/api/profiles/<id>/cdp`. Compose cannot invent this URL — the operator sets it after launch.
+4. `docker compose up -d` again so **webgate** and **searxng** both see the same `CDP_ENDPOINT` / `CDP_API_KEY`.
+5. webgate **does not** call Manager to launch profiles. Google stays **inside SearXNG** (`!g` / `google-cdp` engine). There is no webgate `provider: google`.
+
+### Cloak off / external substitutes
+
+| Goal | How |
+| --- | --- |
+| No Cloak | Omit `--profile cloak`. Set `WEBGATE_CLOAK_DISABLED=1`. `POST /v1/fetch` returns `cloak_disabled`. `provider: searxng` still hits SearXNG. |
+| Existing Manager | Do not start `cloak-manager`. Set `CDP_ENDPOINT` to that instance’s launched profile. |
+| External SearXNG | Set `SEARXNG_BASE_URL` to that instance and start webgate without its dependency: `docker compose up -d --build webgate --no-deps`. |
+| Bundled SearXNG without Google CDP | Leave `CDP_ENDPOINT` empty; other SearXNG engines still work; `!g` needs CDP. |
+
+Validate YAML without bringing the stack up: `docker compose config`.
 
 ### Search — `POST /v1/search`
 
@@ -101,4 +142,4 @@ Acquires one URL via CDP Attach to the **server-configured** Cloak profile. Clie
 
 ## Status
 
-#6: Provider list → parallel search + always LLM-merge (no `merge` request field).
+#7: Compose stack — webgate + SearXNG (Google CDP) + optional Cloak Manager.

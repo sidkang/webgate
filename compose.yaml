@@ -1,0 +1,61 @@
+# webgate compose stack.
+#
+# Default: webgate + bundled SearXNG (Google-via-CDP engine inside SearXNG).
+# Optional: --profile cloak also starts CloakBrowser-Manager.
+#
+# CDP_ENDPOINT is the already-launched Cloak profile CDP URL (operator sets it
+# after launching a profile in Manager). Compose cannot invent it.
+# webgate never calls Manager to launch profiles.
+#
+# Google stays inside SearXNG (!g). There is no webgate provider "google".
+
+services:
+  webgate:
+    build: .
+    ports:
+      - "8787:8787"
+    environment:
+      WEBGATE_ADDR: ":8787"
+      WEBGATE_TOKEN: ${WEBGATE_TOKEN:?set WEBGATE_TOKEN in .env}
+      SEARXNG_BASE_URL: ${SEARXNG_BASE_URL:-http://searxng:8080}
+      CDP_ENDPOINT: ${CDP_ENDPOINT:-}
+      CDP_API_KEY: ${CDP_API_KEY:-}
+      WEBGATE_CLOAK_DISABLED: ${WEBGATE_CLOAK_DISABLED:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      XAI_BASE_URL: ${XAI_BASE_URL:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      XAI_MODEL: ${XAI_MODEL:-}
+    depends_on:
+      - searxng
+    restart: unless-stopped
+
+  searxng:
+    build: ./deploy/searxng
+    ports:
+      - "8080:8080"
+    environment:
+      CDP_ENDPOINT: ${CDP_ENDPOINT:-}
+      CDP_API_KEY: ${CDP_API_KEY:-}
+      SEARXNG_BASE_URL: ${SEARXNG_PUBLIC_BASE_URL:-http://localhost:8080/}
+    volumes:
+      - ./deploy/searxng/config:/etc/searxng
+      - ./deploy/searxng/data:/var/cache/searxng
+    restart: unless-stopped
+
+  # Optional local Manager. Pin tag; bump deliberately.
+  # webgate does not call Manager — set CDP_ENDPOINT to a launched profile URL.
+  cloak-manager:
+    profiles: ["cloak"]
+    image: cloakhq/cloakbrowser-manager:v0.0.10
+    ports:
+      - "8081:8080"
+    environment:
+      AUTH_TOKEN: ${CLOAK_AUTH_TOKEN:-}
+    volumes:
+      - cloak-manager-data:/data
+    restart: unless-stopped
+
+volumes:
+  cloak-manager-data:
