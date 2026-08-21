@@ -32,6 +32,7 @@ func main() {
 		CloakDisabled: envTruthy("WEBGATE_CLOAK_DISABLED"),
 		CDPEndpoint:   strings.TrimSpace(os.Getenv("CDP_ENDPOINT")),
 		CDPAPIKey:     strings.TrimSpace(os.Getenv("CDP_API_KEY")),
+		DebugUI:       debugUIEnabled(),
 	}
 
 	if openai := openAIFromEnv(); openai != nil {
@@ -62,6 +63,13 @@ func main() {
 func envTruthy(key string) bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
 	return v == "1" || v == "true" || v == "yes"
+}
+
+// debugUIEnabled: the debug page is on unless WEBGATE_DEBUG_UI is explicitly
+// set to 0/false/no.
+func debugUIEnabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("WEBGATE_DEBUG_UI")))
+	return v != "0" && v != "false" && v != "no"
 }
 
 func openAIFromEnv() *search.OpenAI {

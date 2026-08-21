@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>webgate debug</title>
+<style>
+  :root {
+    --fg: #1c1c1c; --muted: #6b6b6b; --line: #e2e2e2; --bg: #fafafa;
+    --card: #ffffff; --accent: #2456c4; --err: #b3261e; --ok: #1a7f37;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0 auto; padding: 24px 16px 64px; max-width: 880px;
+    font: 14px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg);
+  }
+  h1 { font-size: 16px; font-weight: 600; margin: 0; }
+  h1 small { color: var(--muted); font-weight: 400; }
+  header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+  .token { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+  .token label { color: var(--muted); font-size: 12px; }
+  input, select, textarea, button {
+    font: inherit; color: inherit; border: 1px solid var(--line);
+    border-radius: 6px; padding: 5px 8px; background: var(--card);
+  }
+  input:focus, select:focus, textarea:focus { outline: 2px solid #b9cdf5; border-color: var(--accent); }
+  nav { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+  nav button {
+    border: none; background: none; border-radius: 6px 6px 0 0;
+    padding: 6px 14px; color: var(--muted); cursor: pointer; font-family: var(--mono); font-size: 13px;
+  }
+  nav button.active { color: var(--fg); background: var(--card); border: 1px solid var(--line); border-bottom-color: var(--card); margin-bottom: -1px; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  form { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 16px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+  .field { display: flex; flex-direction: column; gap: 3px; }
+  .field > span { font-size: 12px; color: var(--muted); }
+  .field.grow { flex: 1 1 260px; }
+  .actions { display: flex; gap: 8px; margin-top: 4px; }
+  button.send { background: var(--accent); border-color: var(--accent); color: #fff; cursor: pointer; padding: 5px 16px; }
+  button.ghost { cursor: pointer; color: var(--muted); }
+  button.ghost:hover, button.send:hover { filter: brightness(1.08); }
+  .out { margin-top: 14px; display: none; }
+  .out.visible { display: block; }
+  .status { font-family: var(--mono); font-size: 13px; margin-bottom: 8px; }
+  .status .code-ok { color: var(--ok); } .status .code-err { color: var(--err); }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .chip {
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px;
+  }
+  .chip.bad { color: var(--err); border-color: #e8c5c2; }
+  details { margin: 8px 0; }
+  summary { cursor: pointer; color: var(--muted); font-size: 12px; user-select: none; }
+  pre {
+    font-family: var(--mono); font-size: 12px; line-height: 1.45;
+    background: var(--card); border: 1px solid var(--line); border-radius: 6px;
+    padding: 10px; margin: 6px 0 0; overflow: auto; max-height: 420px;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .result { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+  .result .errmsg { color: var(--err); font-family: var(--mono); font-size: 13px; }
+  .answer { white-space: pre-wrap; margin: 0 0 8px; }
+  ol.sources { margin: 8px 0 0; padding-left: 22px; }
+  ol.sources li { margin-bottom: 8px; }
+  .src-title { font-weight: 550; }
+  .src-url { font-family: var(--mono); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  .src-snippet { color: #444; font-size: 13px; }
+  a { color: var(--accent); }
+  .fetch-title { font-weight: 600; margin: 0 0 2px; }
+  .fetch-url { font-family: var(--mono); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; margin: 0 0 8px; }
+  .copybtn { margin-top: 6px; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>webgate <small>debug</small></h1>
+  <div class="token">
+    <label for="token">Bearer token</label>
+    <input id="token" type="password" size="28" placeholder="kept in sessionStorage only" autocomplete="off">
+  </div>
+</header>
+
+<nav>
+  <button type="button" data-tab="search" class="active">/v1/search</button>
+  <button type="button" data-tab="x_search">/v1/x_search</button>
+  <button type="button" data-tab="fetch">/v1/fetch</button>
+</nav>
+
+<section class="panel active" id="panel-search">
+  <form data-endpoint="search">
+    <div class="row">
+      <label class="field grow"><span>query (required)</span>
+        <input name="query" placeholder="what to search">
+      </label>
+      <label class="field"><span>limit (1–20)</span>
+        <input name="limit" type="number" min="1" max="20" placeholder="10" style="width:80px">
+      </label>
+    </div>
+    <div class="row">
+      <label class="field grow"><span>provider — omit, llm, auto, searxng, openai, xai, or a comma list of ≥2 (e.g. searxng,openai)</span>
+        <input name="provider" placeholder="omit for default">
+      </label>
+      <label class="field"><span>search_context_size</span>
+        <select name="search_context_size">
+          <option value="">omit</option><option>low</option><option>medium</option><option>high</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <label class="field grow"><span>allowed_domains (comma separated)</span>
+        <input name="allowed_domains" placeholder="example.com, docs.example.com">
+      </label>
+    </div>
+    <details>
+      <summary>user_location</summary>
+      <div class="row" style="margin-top:8px">
+        <label class="field"><span>country (2 letters)</span><input name="loc_country" size="4" maxlength="2"></label>
+        <label class="field"><span>region</span><input name="loc_region" size="12"></label>
+        <label class="field"><span>city</span><input name="loc_city" size="12"></label>
+        <label class="field"><span>timezone</span><input name="loc_timezone" size="16" placeholder="Europe/Paris"></label>
+      </div>
+    </details>
+    <div class="actions">
+      <button type="submit" class="send">Send</button>
+      <button type="button" class="ghost" data-copycurl>Copy curl</button>
+    </div>
+  </form>
+  <div class="out"></div>
+</section>
+
+<section class="panel" id="panel-x_search">
+  <form data-endpoint="x_search">
+    <div class="row">
+      <label class="field grow"><span>query (required)</span>
+        <input name="query" placeholder="what to search on X">
+      </label>
+      <label class="field"><span>from_date</span><input name="from_date" type="date"></label>
+      <label class="field"><span>to_date</span><input name="to_date" type="date"></label>
+    </div>
+    <div class="actions">
+      <button type="submit" class="send">Send</button>
+      <button type="button" class="ghost" data-copycurl>Copy curl</button>
+    </div>
+    <p class="hint">Never falls back to web search; requires xai to be configured.</p>
+  </form>
+  <div class="out"></div>
+</section>
+
+<section class="panel" id="panel-fetch">
+  <form data-endpoint="fetch">
+    <div class="row">
+      <label class="field grow"><span>url (required)</span>
+        <input name="url" placeholder="https://example.com/article">
+      </label>
+      <label class="field"><span>mode</span>
+        <select name="mode"><option>readable</option><option>raw</option></select>
+      </label>
+      <label class="field"><span>kernel</span>
+        <select name="kernel"><option>defuddle</option><option>html-extractor</option><option>llm</option></select>
+      </label>
+    </div>
+    <div class="actions">
+      <button type="submit" class="send">Send</button>
+      <button type="button" class="ghost" data-copycurl>Copy curl</button>
+    </div>
+  </form>
+  <div class="out"></div>
+</section>
+
+<script>
+"use strict";
+(() => {
+  const $ = (sel, root) => (root || document).querySelector(sel);
+  const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+
+  // --- token: sessionStorage only, never URL / localStorage ---
+  const tokenInput = $("#token");
+  tokenInput.value = sessionStorage.getItem("webgate_token") || "";
+  tokenInput.addEventListener("input", () => {
+    sessionStorage.setItem("webgate_token", tokenInput.value);
+  });
+
+  // --- tabs ---
+  $$("nav button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      $$("nav button").forEach((b) => b.classList.toggle("active", b === btn));
+      $$(".panel").forEach((p) =>
+        p.classList.toggle("active", p.id === "panel-" + btn.dataset.tab));
+    });
+  });
+
+  // --- DOM helpers: text only, never innerHTML with API data ---
+  function el(tag, className, text) {
+    const n = document.createElement(tag);
+    if (className) n.className = className;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  }
+  function isHttpUrl(u) {
+    try { const p = new URL(u); return p.protocol === "http:" || p.protocol === "https:"; }
+    catch { return false; }
+  }
+  function detailsBlock(label, text, open) {
+    const d = el("details");
+    if (open) d.open = true;
+    d.appendChild(el("summary", "", label));
+    d.appendChild(el("pre", "", text));
+    return d;
+  }
+
+  // --- request body builders (omit empty fields) ---
+  function val(form, name) { return (form.elements[name] ? form.elements[name].value : "").trim(); }
+  function splitList(s) { return s.split(",").map((x) => x.trim()).filter(Boolean); }
+
+  const builders = {
+    search(form) {
+      const body = { query: val(form, "query") };
+      const limit = val(form, "limit");
+      if (limit !== "") body.limit = Number(limit);
+      const provider = val(form, "provider");
+      if (provider !== "") {
+        body.provider = provider.includes(",") ? splitList(provider) : provider;
+      }
+      const ctx = val(form, "search_context_size");
+      if (ctx !== "") body.search_context_size = ctx;
+      const domains = val(form, "allowed_domains");
+      if (domains !== "") body.allowed_domains = splitList(domains);
+      const loc = {};
+      if (val(form, "loc_country")) loc.country = val(form, "loc_country");
+      if (val(form, "loc_region")) loc.region = val(form, "loc_region");
+      if (val(form, "loc_city")) loc.city = val(form, "loc_city");
+      if (val(form, "loc_timezone")) loc.timezone = val(form, "loc_timezone");
+      if (Object.keys(loc).length) body.user_location = loc;
+      return body;
+    },
+    x_search(form) {
+      const body = { query: val(form, "query") };
+      if (val(form, "from_date")) body.from_date = val(form, "from_date");
+      if (val(form, "to_date")) body.to_date = val(form, "to_date");
+      return body;
+    },
+    fetch(form) {
+      return { url: val(form, "url"), mode: val(form, "mode"), kernel: val(form, "kernel") };
+    },
+  };
+
+  const paths = { search: "/v1/search", x_search: "/v1/x_search", fetch: "/v1/fetch" };
+
+  // --- curl: token is never spelled out, always $WEBGATE_TOKEN ---
+  function shq(s) { return "'" + s.replace(/'/g, "'\\''") + "'"; }
+  function buildCurl(path, body) {
+    return [
+      "curl -sS -X POST " + shq(location.origin + path),
+      "  -H 'Content-Type: application/json'",
+      '  -H "Authorization: Bearer $WEBGATE_TOKEN"',
+      "  -d " + shq(JSON.stringify(body)),
+    ].join(" \\\n");
+  }
+  function copyText(text, btn) {
+    const done = () => {
+      const old = btn.textContent;
+      btn.textContent = "copied";
+      setTimeout(() => { btn.textContent = old; }, 1200);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, done);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = text; document.body.appendChild(ta);
+      ta.select(); document.execCommand("copy"); ta.remove(); done();
+    }
+  }
+
+  // --- result renderers ---
+  function renderSearchResult(data) {
+    const box = el("div", "result");
+    box.appendChild(el("p", "answer", data.answer || "(empty answer)"));
+    const sources = Array.isArray(data.sources) ? data.sources : [];
+    if (sources.length) {
+      const list = el("ol", "sources");
+      for (const s of sources) {
+        const li = el("li");
+        const title = (s && s.title) || "(untitled)";
+        if (s && isHttpUrl(s.url)) {
+          const a = el("a", "src-title", title);
+          a.href = s.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+          li.appendChild(a);
+        } else {
+          li.appendChild(el("span", "src-title", title));
+        }
+        li.appendChild(el("div", "src-url", (s && s.url) || ""));
+        if (s && s.snippet) li.appendChild(el("div", "src-snippet", s.snippet));
+        list.appendChild(li);
+      }
+      box.appendChild(list);
+    } else {
+      box.appendChild(el("div", "src-url", "no sources"));
+    }
+    return box;
+  }
+
+  function renderFetchResult(data) {
+    const box = el("div", "result");
+    box.appendChild(el("p", "fetch-title", data.title || "(no title)"));
+    let urlLine = data.url || "";
+    if (data.requestedUrl && data.requestedUrl !== data.url) {
+      urlLine += "   (requested: " + data.requestedUrl + ")";
+    }
+    box.appendChild(el("p", "fetch-url", urlLine));
+    // content may be raw HTML — displayed strictly as text
+    box.appendChild(detailsBlock(
+      "content (" + String(data.content == null ? 0 : String(data.content).length) + " chars, shown as text)",
+      data.content == null ? "" : String(data.content), true));
+    return box;
+  }
+
+  function renderError(data) {
+    const box = el("div", "result");
+    box.appendChild(el("div", "errmsg",
+      "code: " + ((data && data.code) || "?") + " — " + ((data && data.error) || "(no error message)")));
+    return box;
+  }
+
+  function chip(text, bad) { return el("span", bad ? "chip bad" : "chip", text); }
+
+  function processChips(endpoint, data, isError) {
+    const chips = [];
+    if (isError) {
+      if (data && data.code) chips.push(chip("code: " + data.code, true));
+      return chips;
+    }
+    if (!data) return chips;
+    if (data.provider) chips.push(chip("provider: " + data.provider));
+    if (data.merge) {
+      chips.push(data.merge.ok
+        ? chip("merge: ok")
+        : chip("merge: failed (" + (data.merge.code || "?") + ")", true));
+    }
+    if (endpoint === "fetch") {
+      if (data.kernel) chips.push(chip("kernel: " + data.kernel));
+      if (data.mode) chips.push(chip("mode: " + data.mode));
+      chips.push(chip(
+        data.truncated
+          ? "truncated: " + data.returnedChars + " of " + data.totalChars + " chars"
+          : "complete: " + data.returnedChars + " chars",
+        Boolean(data.truncated)));
+    }
+    if (Array.isArray(data.sources)) chips.push(chip("sources: " + data.sources.length));
+    return chips;
+  }
+
+  // --- send ---
+  async function send(form, out) {
+    const endpoint = form.dataset.endpoint;
+    const path = paths[endpoint];
+    const body = builders[endpoint](form);
+    const bodyJSON = JSON.stringify(body, null, 2);
+
+    out.classList.add("visible");
+    out.replaceChildren(el("div", "status", "POST " + path + " … waiting"));
+
+    const t0 = performance.now();
+    let status = 0, statusText = "", rawText = "", data = null, netErr = null;
+    try {
+      const resp = await fetch(path, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + tokenInput.value.trim(),
+        },
+        body: JSON.stringify(body),
+      });
+      status = resp.status; statusText = resp.statusText;
+      rawText = await resp.text();
+      try { data = JSON.parse(rawText); } catch { data = null; }
+    } catch (e) {
+      netErr = e;
+    }
+    const ms = Math.round(performance.now() - t0);
+    const isError = Boolean(netErr) || status < 200 || status >= 300;
+
+    out.replaceChildren();
+
+    // 1. process: what happened
+    const statusLine = el("div", "status");
+    statusLine.appendChild(el("span", "", "POST " + path + " → "));
+    statusLine.appendChild(el("span", isError ? "code-err" : "code-ok",
+      netErr ? "network error" : status + " " + statusText));
+    statusLine.appendChild(el("span", "", " · " + ms + " ms"));
+    out.appendChild(statusLine);
+
+    const chips = processChips(endpoint, data, isError);
+    if (chips.length) {
+      const row = el("div", "chips");
+      chips.forEach((c) => row.appendChild(c));
+      out.appendChild(row);
+    }
+
+    // 2. result, rendered usefully
+    if (netErr) {
+      const box = el("div", "result");
+      box.appendChild(el("div", "errmsg", "fetch failed: " + netErr.message));
+      out.appendChild(box);
+    } else if (isError) {
+      out.appendChild(data ? renderError(data)
+        : detailsBlock("non-JSON response body", rawText, true));
+    } else if (endpoint === "fetch") {
+      out.appendChild(renderFetchResult(data || {}));
+    } else {
+      out.appendChild(renderSearchResult(data || {}));
+    }
+
+    // 3. what was sent + raw JSON + curl, one click away
+    out.appendChild(detailsBlock("request body sent", bodyJSON, false));
+    if (!netErr) {
+      out.appendChild(detailsBlock("raw response JSON",
+        data ? JSON.stringify(data, null, 2) : rawText, false));
+    }
+    const curl = buildCurl(path, body);
+    const curlDetails = detailsBlock("curl (uses $WEBGATE_TOKEN)", curl, false);
+    const copy = el("button", "ghost copybtn", "Copy curl");
+    copy.type = "button";
+    copy.addEventListener("click", () => copyText(curl, copy));
+    curlDetails.appendChild(copy);
+    out.appendChild(curlDetails);
+  }
+
+  $$("form[data-endpoint]").forEach((form) => {
+    const out = $(".out", form.closest("section"));
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      send(form, out);
+    });
+    $("[data-copycurl]", form).addEventListener("click", (e) => {
+      const endpoint = form.dataset.endpoint;
+      copyText(buildCurl(paths[endpoint], builders[endpoint](form)), e.target);
+    });
+  });
+})();
+</script>
+</body>
+</html>

@@ -24,6 +24,9 @@ type Config struct {
 	MaxInlineChars int
 	FetchTimeout   time.Duration
 	Lookup         fetch.Lookup
+	// DebugUI serves the static debug/try page on GET /debug (and redirects
+	// GET / there). Off by default; main enables it unless WEBGATE_DEBUG_UI=0.
+	DebugUI bool
 }
 
 type Server struct {
@@ -60,6 +63,9 @@ func New(cfg Config) http.Handler {
 	s.mux.HandleFunc("POST /v1/search", s.handleSearch)
 	s.mux.HandleFunc("POST /v1/fetch", s.handleFetch)
 	s.mux.HandleFunc("POST /v1/x_search", s.handleXSearch)
+	if cfg.DebugUI {
+		s.registerDebugUI()
+	}
 	return s
 }
 
