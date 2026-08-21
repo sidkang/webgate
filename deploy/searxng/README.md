@@ -1,7 +1,9 @@
 # SearXNG deploy unit (webgate compose)
 
 Bundled with the webgate compose stack. Official `searxng/searxng` (pinned tag)
-plus an **in-container** Google engine that talks to an external Cloak CDP profile.
+plus an **in-container** Google engine that talks to an external CDP
+(`CDP_ENDPOINT`). Compose default is the bundled CloakBrowser `cloakserve`
+at `http://cloak:9222`.
 
 - On the compose network only (`expose: 8080`); not published to the host
 - Google CDP proxy stays on `127.0.0.1:3100` inside the container
@@ -11,7 +13,7 @@ plus an **in-container** Google engine that talks to an external Cloak CDP profi
 - First boot materializes `settings.yml` from the template with a **random**
   `secret_key` and `search.formats: [html, json]`
 
-`CDP_ENDPOINT` / `CDP_API_KEY` must match webgate (same launched Cloak profile).
+`CDP_ENDPOINT` / `CDP_API_KEY` must match webgate (same CDP).
 
 ### Existing `settings.yml`
 

@@ -647,7 +647,11 @@ func resolveCDPWebsocketURL(ctx context.Context, endpoint, apiKey string) (strin
 	}
 	switch u.Scheme {
 	case "http", "https":
-		// keep path/query (Manager CDP URLs, /json/version, …)
+		// Chrome / cloakserve HTTP root is /json/version. Keep a non-root
+		// path as-is (custom discovery URLs).
+		if u.Path == "" || u.Path == "/" {
+			u.Path = "/json/version"
+		}
 	default:
 		return "", fmt.Errorf("unsupported cdp endpoint scheme")
 	}

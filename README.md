@@ -11,11 +11,11 @@ Not an app. `ai-news` and later news / finance packs are callers. This repo is s
 - `search` — LLM-assisted search and/or fetch a source list page
 - `fetch` — get detail for a URL/ref (DOM preferred, raw exists)
 
-Special adapters (planned): YouTube captions, self-hosted SearXNG, Cloak Manager CDP profiles.
+Special adapters (planned): YouTube captions, self-hosted SearXNG.
 
 ## Phase 1 shape
 
-One server next to **Cloak Manager** on the **128G homelab**. Many Chromium **profiles**, not many scrape servers. No geo split yet.
+One server on the **128G homelab**. One CDP browser (bundled CloakBrowser, or any other existing CDP). No geo split yet.
 
 ```
 clients (Pi, process, …)
@@ -24,12 +24,12 @@ clients (Pi, process, …)
  webgate (this repo, homelab)
         │  connectOverCDP
         v
- Cloak Manager profiles  (pin: 财新 / 雪球 / X; else any)
+ one Chromium  (cloakserve, or CDP_ENDPOINT override)
 ```
 
 Return follows the same path. webgate does **not** store pipeline items (hidden cache only). Durable data stays on the homelab store, owned by callers.
 
-Pins are **static config** (profile id). No runtime failover.
+No runtime failover. Swap the CDP by changing `CDP_ENDPOINT`.
 
 ## Stack
 
@@ -40,9 +40,9 @@ Go service. Local-first. Cloudflare free (Worker hop, Tunnel) is optional.
 ```sh
 export WEBGATE_TOKEN=dev-token
 export SEARXNG_BASE_URL=http://127.0.0.1:8080   # provider searxng / auto
-export CDP_ENDPOINT=ws://…/devtools/browser/...   # launched Cloak profile
+export CDP_ENDPOINT=http://127.0.0.1:9222   # any CDP HTTP root, /json/version, or ws://…
 # export CDP_API_KEY=...
-# export WEBGATE_CLOAK_DISABLED=1
+# export WEBGATE_CLOAK_DISABLED=1   # fetch returns cloak_disabled; search still works
 
 # Hosted web_search via official openai-go Responses client (custom base URL for CLIProxy).
 # Secrets stay in env.
@@ -60,11 +60,16 @@ go run ./cmd/webgate
 Listens on `WEBGATE_ADDR` (default `:8787`, all interfaces). Clients send
 `Authorization: Bearer $WEBGATE_TOKEN`.
 
-## Compose (webgate + SearXNG + optional Cloak Manager)
+## Compose (webgate + SearXNG + CloakBrowser)
 
 **webgate** (`:8787`) is the only caller-facing API. Bundled **SearXNG** is
-internal to the compose network (`expose: 8080`, no host publish). Optional
-**Cloak Manager** binds to `127.0.0.1:8081` via `compose.cloak.yaml`.
+internal to the compose network (`expose: 8080`, no host publish). Bundled
+**CloakBrowser** (`cloakserve`) is one stealth Chromium on the compose
+network (`expose: 9222`, not published). Fetch and SearXNG `!g` both attach
+to it via `CDP_ENDPOINT` (default `http://cloak:9222`).
+
+No Manager and no profiles. Override `CDP_ENDPOINT` to use any other
+already-running CDP instead of the bundled browser.
 
 Secrets stay in `.env` (see `.env.example`). Never commit real tokens.
 
@@ -73,33 +78,23 @@ cp .env.example .env
 # set WEBGATE_TOKEN=…
 mkdir -p deploy/searxng/config deploy/searxng/data
 
-# Default: webgate (LAN :8787) + internal SearXNG
+# webgate (LAN :8787) + internal SearXNG + cloakserve CDP
 docker compose up -d --build
-
-# Optional local Manager (localhost only; AUTH_TOKEN required)
-CLOAK_AUTH_TOKEN=… docker compose -f compose.yaml -f compose.cloak.yaml --profile cloak up -d --build
 ```
 
-### First-run with Cloak fetch / SearXNG `!g`
+Google stays **inside SearXNG** (`!g`). There is no webgate `provider: google`.
 
-1. Start the stack (add the cloak overlay if you need a local Manager).
-2. Open Manager from the host (`http://127.0.0.1:8081`), create/launch a profile.
-3. Set `CDP_ENDPOINT` in `.env` (and `CDP_API_KEY` if required) to that profile’s CDP URL. From the **compose network**, use `http://cloak-manager:8080/api/profiles/<id>/cdp` — not `127.0.0.1:8081`. Compose cannot invent this URL.
-4. `docker compose up -d` again so **webgate** and **searxng** both see the same `CDP_ENDPOINT` / `CDP_API_KEY`.
-5. webgate **does not** call Manager to launch profiles. Google stays **inside SearXNG** (`!g`). There is no webgate `provider: google`.
-
-### Cloak off / external substitutes
+### CDP / fetch substitutes
 
 | Goal | How |
 | --- | --- |
-| No Cloak | Omit the cloak overlay. Set `WEBGATE_CLOAK_DISABLED=1`. `POST /v1/fetch` returns `cloak_disabled`. `provider: searxng` still hits SearXNG. |
-| Existing Manager | Do not start `cloak-manager`. Set `CDP_ENDPOINT` to that instance’s launched profile. |
+| Other existing CDP | Set `CDP_ENDPOINT` (HTTP root, `/json/version`, or `ws://…`). Same value for webgate and SearXNG. |
+| Fetch off | `WEBGATE_CLOAK_DISABLED=1`. `POST /v1/fetch` returns `cloak_disabled`. Search still works. |
 | External SearXNG | Set `SEARXNG_BASE_URL` and `docker compose up -d --build webgate --no-deps`. |
-| Bundled SearXNG without Google CDP | Leave `CDP_ENDPOINT` empty; other engines still work; `!g` needs CDP. |
 
 First boot writes `search.formats: [html, json]` and a **random** `secret_key`. Existing `deploy/searxng/config/settings.yml` is never rewritten — merge `search.formats` yourself if missing (else 403 on `format=json`).
 
-Validate YAML: `docker compose config` (cloak: add `-f compose.cloak.yaml` and set `CLOAK_AUTH_TOKEN`).
+Validate YAML: `docker compose config`.
 
 ### Threat model (short)
 

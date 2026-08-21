@@ -1,14 +1,13 @@
 # webgate compose stack.
 #
-# Default: webgate + bundled SearXNG (Google-via-CDP engine inside SearXNG).
-# Optional Cloak Manager: use compose.cloak.yaml (see README).
-#
-# CDP_ENDPOINT is the already-launched Cloak profile CDP URL (operator sets it
-# after launching a profile in Manager). Compose cannot invent it.
-# webgate never calls Manager to launch profiles.
-#
+# Default: webgate + bundled SearXNG + one CloakBrowser (cloakserve CDP).
 # Google stays inside SearXNG (!g). There is no webgate provider "google".
-# Only webgate publishes a caller-facing port. SearXNG stays on the compose network.
+# Only webgate publishes a caller-facing port. SearXNG and CDP stay on the
+# compose network.
+#
+# CDP_ENDPOINT defaults to the bundled cloakserve HTTP root
+# (http://cloak:9222). Override it to point at any other already-running
+# CDP (http://host:port, /json/version, or ws://…). No Manager, no profiles.
 
 services:
   webgate:
@@ -19,7 +18,7 @@ services:
       WEBGATE_ADDR: ":8787"
       WEBGATE_TOKEN: ${WEBGATE_TOKEN:?set WEBGATE_TOKEN in .env}
       SEARXNG_BASE_URL: ${SEARXNG_BASE_URL:-http://searxng:8080}
-      CDP_ENDPOINT: ${CDP_ENDPOINT:-}
+      CDP_ENDPOINT: ${CDP_ENDPOINT:-http://cloak:9222}
       CDP_API_KEY: ${CDP_API_KEY:-}
       WEBGATE_CLOAK_DISABLED: ${WEBGATE_CLOAK_DISABLED:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
@@ -29,7 +28,10 @@ services:
       XAI_API_KEY: ${XAI_API_KEY:-}
       XAI_MODEL: ${XAI_MODEL:-}
     depends_on:
-      - searxng
+      searxng:
+        condition: service_started
+      cloak:
+        condition: service_healthy
     restart: unless-stopped
 
   searxng:
@@ -37,7 +39,7 @@ services:
     expose:
       - "8080"
     environment:
-      CDP_ENDPOINT: ${CDP_ENDPOINT:-}
+      CDP_ENDPOINT: ${CDP_ENDPOINT:-http://cloak:9222}
       CDP_API_KEY: ${CDP_API_KEY:-}
       SEARXNG_BASE_URL: ${SEARXNG_PUBLIC_BASE_URL:-http://searxng:8080/}
       MIN_INTERVAL_MS: ${MIN_INTERVAL_MS:-}
@@ -55,4 +57,22 @@ services:
     volumes:
       - ./deploy/searxng/config:/etc/searxng
       - ./deploy/searxng/data:/var/cache/searxng
+    depends_on:
+      cloak:
+        condition: service_healthy
+    restart: unless-stopped
+
+  cloak:
+    image: cloakhq/cloakbrowser:latest
+    command: cloakserve
+    expose:
+      - "9222"
+    # CDP is unauthenticated. Do not publish 9222 to the host/LAN.
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9222/json/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    shm_size: "2gb"
     restart: unless-stopped

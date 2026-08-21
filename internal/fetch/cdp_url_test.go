@@ -33,6 +33,28 @@ func TestResolveCDPWebsocketURLKeepsManagerPath(t *testing.T) {
 	}
 }
 
+func TestResolveCDPWebsocketURLHTTPRootUsesJSONVersion(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/browser/abc",
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	wsURL, err := fetch.ResolveCDPWebsocketURLForTest(context.Background(), srv.URL, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/json/version" {
+		t.Fatalf("path=%q want /json/version", gotPath)
+	}
+	if wsURL != "ws://127.0.0.1:9222/devtools/browser/abc" {
+		t.Fatalf("wsURL=%q", wsURL)
+	}
+}
+
 func TestResolveCDPWebsocketURLPassthroughWS(t *testing.T) {
 	in := "ws://127.0.0.1:9222/devtools/browser/xyz"
 	out, err := fetch.ResolveCDPWebsocketURLForTest(context.Background(), in, "")
