@@ -40,8 +40,9 @@
   .field.grow { flex: 1 1 260px; }
   .actions { display: flex; gap: 8px; margin-top: 4px; }
   button.send { background: var(--accent); border-color: var(--accent); color: #fff; cursor: pointer; padding: 5px 16px; }
+  button.send:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
   button.ghost { cursor: pointer; color: var(--muted); }
-  button.ghost:hover, button.send:hover { filter: brightness(1.08); }
+  button.ghost:hover, button.send:hover:not(:disabled) { filter: brightness(1.08); }
   .out { margin-top: 14px; display: none; }
   .out.visible { display: block; }
   .status { font-family: var(--mono); font-size: 13px; margin-bottom: 8px; }
@@ -160,7 +161,12 @@
         <select name="mode"><option>readable</option><option>raw</option></select>
       </label>
       <label class="field"><span>kernel</span>
-        <select name="kernel"><option>defuddle</option><option>html-extractor</option><option>llm</option></select>
+        <select name="kernel">
+          <option value="">omit</option>
+          <option>defuddle</option>
+          <option>html-extractor</option>
+          <option>llm</option>
+        </select>
       </label>
     </div>
     <div class="actions">
@@ -180,9 +186,16 @@
   // --- token: sessionStorage only, never URL / localStorage ---
   const tokenInput = $("#token");
   tokenInput.value = sessionStorage.getItem("webgate_token") || "";
+  function tokenValue() { return tokenInput.value.trim(); }
+  function syncSendEnabled() {
+    const on = tokenValue() !== "";
+    $$("button.send").forEach((b) => { b.disabled = !on; });
+  }
   tokenInput.addEventListener("input", () => {
     sessionStorage.setItem("webgate_token", tokenInput.value);
+    syncSendEnabled();
   });
+  syncSendEnabled();
 
   // --- tabs ---
   $$("nav button").forEach((btn) => {
@@ -244,7 +257,10 @@
       return body;
     },
     fetch(form) {
-      return { url: val(form, "url"), mode: val(form, "mode"), kernel: val(form, "kernel") };
+      const body = { url: val(form, "url") };
+      if (val(form, "mode")) body.mode = val(form, "mode");
+      if (val(form, "kernel")) body.kernel = val(form, "kernel");
+      return body;
     },
   };
 
@@ -361,6 +377,12 @@
     const bodyJSON = JSON.stringify(body, null, 2);
 
     out.classList.add("visible");
+    if (tokenValue() === "") {
+      out.replaceChildren(el("div", "status"));
+      out.firstChild.appendChild(el("span", "code-err", "Bearer token is required"));
+      out.appendChild(el("p", "hint", "Enter the token in the header before sending. It stays in sessionStorage only."));
+      return;
+    }
     out.replaceChildren(el("div", "status", "POST " + path + " … waiting"));
 
     const t0 = performance.now();
@@ -370,7 +392,7 @@
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": "Bearer " + tokenInput.value.trim(),
+          "Authorization": "Bearer " + tokenValue(),
         },
         body: JSON.stringify(body),
       });

@@ -33,6 +33,12 @@ func TestDebugPageEnabled(t *testing.T) {
 	if strings.Contains(body, testToken) {
 		t.Fatal("debug page must not contain the server token")
 	}
+	if !strings.Contains(body, `name="kernel"`) || !strings.Contains(body, `<option value="">omit</option>`) {
+		t.Fatal("fetch kernel must be omittable")
+	}
+	if !strings.Contains(body, "Bearer token is required") {
+		t.Fatal("empty token must be refused before send")
+	}
 }
 
 func TestDebugPageRootRedirect(t *testing.T) {
