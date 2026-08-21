@@ -107,12 +107,12 @@ func (s *Service) Fetch(ctx context.Context, rawURL string, mode Mode, kernel Ke
 		return Result{}, NewError(CodeMissingConfig, "No CDP endpoint is configured. Set CDP_ENDPOINT.")
 	}
 
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+
 	if _, err := AssertFetchURLAllowed(ctx, rawURL, s.lookup); err != nil {
 		return Result{}, err
 	}
-
-	ctx, cancel := context.WithTimeout(ctx, s.timeout)
-	defer cancel()
 
 	page, err := s.capturer.Capture(ctx, strings.TrimSpace(rawURL))
 	if err != nil {

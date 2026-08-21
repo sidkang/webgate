@@ -81,14 +81,18 @@ def clean_google_url(href: str | None) -> str | None:
         return None
     if href.startswith("/url?") or href.startswith("https://www.google.com/url?"):
         target = (parse_qs(urlparse(href).query).get("q") or [None])[0]
-        if not target or not target.startswith("http"):
+        if not target:
             return None
-        host = urlparse(target).hostname or ""
+        parsed = urlparse(target)
+        if parsed.scheme not in ("http", "https"):
+            return None
+        host = parsed.hostname or ""
         return None if "google." in host or host.endswith("googleusercontent.com") else target
-    if href.startswith("http"):
-        host = urlparse(href).hostname or ""
-        return None if "google." in host or host.endswith("googleusercontent.com") else href
-    return None
+    parsed = urlparse(href)
+    if parsed.scheme not in ("http", "https"):
+        return None
+    host = parsed.hostname or ""
+    return None if "google." in host or host.endswith("googleusercontent.com") else href
 
 
 class GoogleProxy:

@@ -1,23 +1,21 @@
 # SearXNG deploy unit (webgate compose)
 
-Bundled with the webgate compose stack. Official `searxng/searxng` plus an
-**in-container** Google engine that talks to an external Cloak CDP profile.
+Bundled with the webgate compose stack. Official `searxng/searxng` (pinned tag)
+plus an **in-container** Google engine that talks to an external Cloak CDP profile.
 
-- Publishes only SearXNG `:8080`; Google CDP proxy stays on `127.0.0.1:3100`
+- On the compose network only (`expose: 8080`); not published to the host
+- Google CDP proxy stays on `127.0.0.1:3100` inside the container
 - Keeps `/etc/searxng` and `/var/cache/searxng` volumes
 - Does **not** launch Chrome, Redis, or Valkey
 - Google is a SearXNG engine (`!g`), never a webgate `provider`
-- First-boot `settings.yml` (from `settings.template.yml`) enables
-  `search.formats: [html, json]` so webgate `provider: searxng` works
+- First boot materializes `settings.yml` from the template with a **random**
+  `secret_key` and `search.formats: [html, json]`
 
 `CDP_ENDPOINT` / `CDP_API_KEY` must match webgate (same launched Cloak profile).
 
-See the repo root `README.md` and `compose.yaml` for how to run this unit.
-
 ### Existing `settings.yml`
 
-The image only generates `/etc/searxng/settings.yml` on **first** boot. If the
-config volume already has a `settings.yml` without `search.formats` including
-`json`, SearXNG returns **403** for `GET /search?format=json` and webgate
-`provider: searxng` fails. Merge [`settings.yml.snippet`](settings.yml.snippet)
-(or at least the `search.formats` block) into that file and restart.
+Entrypoint **never rewrites** an existing `/etc/searxng/settings.yml`. If the
+config volume already has a file without `search.formats` including `json`,
+SearXNG returns **403** for `GET /search?format=json`. Merge
+[`settings.yml.snippet`](settings.yml.snippet) and restart.

@@ -299,6 +299,8 @@ func WaitForLoadMilestone(ctx context.Context, opts struct {
 }
 
 // SignatureExpression is the host SIGNATURE_EXPRESSION for Runtime.evaluate.
+// htmlChars uses the cheap textLength signal (not outerHTML) so the 250ms
+// readiness loop does not serialize the full document repeatedly.
 const SignatureExpression = `(() => {
 	const root = document.querySelector("main")
 		|| document.querySelector('[role="main"]')
@@ -315,7 +317,7 @@ const SignatureExpression = `(() => {
 	const viewport = window.innerHeight || 0;
 	const y = window.scrollY || document.documentElement.scrollTop || 0;
 	const canScroll = scrollHeight > viewport + y + 4;
-	const htmlChars = document.documentElement ? String(document.documentElement.outerHTML).length : 0;
+	const htmlChars = textLength;
 	return { textLength, articleCount, linkCount, headingCount, scrollHeight, canScroll, htmlChars };
 })()`
 

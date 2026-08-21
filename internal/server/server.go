@@ -95,9 +95,77 @@ type errorBody struct {
 	Code  string `json:"code"`
 }
 
+const (
+	maxRequestBodyBytes = 64 * 1024
+	maxQueryChars       = 2000
+	maxFetchURLChars    = 2048
+	maxAllowedDomains   = 20
+	maxDomainChars      = 253
+	maxLocationField    = 200
+)
+
+func requireJSONBody(w http.ResponseWriter, r *http.Request) bool {
+	ct := r.Header.Get("Content-Type")
+	if ct == "" || !strings.Contains(strings.ToLower(ct), "application/json") {
+		writeError(w, http.StatusBadRequest, "invalid_input", "Content-Type must be application/json")
+		return false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	return true
+}
+
+func capRunes(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 0 {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max])
+}
+
+func validateAllowedDomains(domains []string) ([]string, bool) {
+	if len(domains) == 0 {
+		return nil, true
+	}
+	if len(domains) > maxAllowedDomains {
+		return nil, false
+	}
+	out := make([]string, 0, len(domains))
+	for _, d := range domains {
+		d = strings.TrimSpace(d)
+		if d == "" {
+			continue
+		}
+		if len([]rune(d)) > maxDomainChars {
+			return nil, false
+		}
+		out = append(out, d)
+	}
+	return out, true
+}
+
+func capUserLocation(loc *search.UserLocation) *search.UserLocation {
+	if loc == nil {
+		return nil
+	}
+	return &search.UserLocation{
+		Type:     capRunes(loc.Type, maxLocationField),
+		Country:  capRunes(loc.Country, maxLocationField),
+		Region:   capRunes(loc.Region, maxLocationField),
+		City:     capRunes(loc.City, maxLocationField),
+		Timezone: capRunes(loc.Timezone, maxLocationField),
+	}
+}
+
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if !s.authorized(r) {
 		writeError(w, http.StatusUnauthorized, "auth_failed", "missing or invalid bearer token")
+		return
+	}
+	if !requireJSONBody(w, r) {
 		return
 	}
 
@@ -110,9 +178,14 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_input", "merge is not a request field")
 		return
 	}
-	query := strings.TrimSpace(req.Query)
+	query := capRunes(req.Query, maxQueryChars)
 	if query == "" {
 		writeError(w, http.StatusBadRequest, "invalid_input", "query is required")
+		return
+	}
+	domains, ok := validateAllowedDomains(req.AllowedDomains)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid_input", "allowed_domains is invalid")
 		return
 	}
 
@@ -140,8 +213,8 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		Query:             query,
 		Limit:             limit,
 		SearchContextSize: ctxSize,
-		AllowedDomains:    req.AllowedDomains,
-		UserLocation:      req.UserLocation,
+		AllowedDomains:    domains,
+		UserLocation:      capUserLocation(req.UserLocation),
 	}
 
 	if plan.Parallel {
@@ -185,12 +258,15 @@ func (s *Server) handleXSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "auth_failed", "missing or invalid bearer token")
 		return
 	}
+	if !requireJSONBody(w, r) {
+		return
+	}
 	var req xSearchRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_input", "request body must be JSON")
 		return
 	}
-	query := strings.TrimSpace(req.Query)
+	query := capRunes(req.Query, maxQueryChars)
 	if query == "" {
 		writeError(w, http.StatusBadRequest, "invalid_input", "query is required")
 		return
@@ -221,6 +297,9 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "auth_failed", "missing or invalid bearer token")
 		return
 	}
+	if !requireJSONBody(w, r) {
+		return
+	}
 
 	var req fetchRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -231,7 +310,7 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_input", "profile must not be sent by clients")
 		return
 	}
-	url := strings.TrimSpace(req.URL)
+	url := capRunes(req.URL, maxFetchURLChars)
 	if url == "" {
 		writeError(w, http.StatusBadRequest, "invalid_input", "url is required")
 		return
@@ -265,7 +344,7 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 		"content":       result.Content,
 		"mode":          result.Mode,
 		"kernel":        result.Kernel,
-		"truncated":    result.Truncated,
+		"truncated":     result.Truncated,
 		"totalChars":    result.TotalChars,
 		"returnedChars": result.ReturnedChars,
 	})
@@ -389,6 +468,7 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
 }

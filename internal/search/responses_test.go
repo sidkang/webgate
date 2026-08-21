@@ -38,11 +38,28 @@ func TestHasWebSearchSuccess(t *testing.T) {
 	if search.HasWebSearchSuccess(search.BackendResponse{}) {
 		t.Fatal("empty")
 	}
-	if !search.HasWebSearchSuccess(search.BackendResponse{Answer: "a"}) {
-		t.Fatal("answer")
+	if search.HasWebSearchSuccess(search.BackendResponse{Answer: "a"}) {
+		t.Fatal("answer-only must fail without structured evidence")
 	}
-	if !search.HasWebSearchSuccess(search.BackendResponse{Sources: []search.Source{{URL: "https://a.com"}}}) {
-		t.Fatal("sources")
+	if search.HasWebSearchSuccess(search.BackendResponse{
+		Answer:  "a",
+		Sources: []search.Source{{URL: "https://a.com"}},
+	}) {
+		t.Fatal("scraped sources alone are not enough")
+	}
+	if !search.HasWebSearchSuccess(search.BackendResponse{
+		Answer:       "a",
+		CitationURLs: []string{"https://a.com"},
+	}) {
+		t.Fatal("citation urls")
+	}
+	if !search.HasWebSearchSuccess(search.BackendResponse{
+		Answer: "a",
+		OutputItems: []any{
+			map[string]any{"type": "web_search_call"},
+		},
+	}) {
+		t.Fatal("web_search_call")
 	}
 }
 

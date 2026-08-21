@@ -3,7 +3,7 @@
 # webgate compose SearXNG deploy unit: official SearXNG runtime plus an
 # in-container Google-via-CDP engine. Volumes, settings, and startup match
 # the upstream image; only the CDP client is added. No Chrome in this image.
-ARG SEARXNG_IMAGE="docker.io/searxng/searxng:latest"
+ARG SEARXNG_IMAGE="docker.io/searxng/searxng:2026.8.20-487d7a96e"
 ARG UV_IMAGE="ghcr.io/astral-sh/uv:0.10.10"
 ARG PYPI_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
 ARG PLAYWRIGHT_VERSION="1.62.0"

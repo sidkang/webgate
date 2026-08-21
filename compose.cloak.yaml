@@ -1,0 +1,21 @@
+# Optional CloakBrowser-Manager overlay.
+# Usage:
+#   CLOAK_AUTH_TOKEN=… docker compose -f compose.yaml -f compose.cloak.yaml --profile cloak up -d
+#
+# AUTH_TOKEN is required (empty token is not a supported cloak deploy).
+# Manager binds to localhost only; webgate does not call Manager to launch profiles.
+
+services:
+  cloak-manager:
+    profiles: ["cloak"]
+    image: cloakhq/cloakbrowser-manager:v0.0.10
+    ports:
+      - "127.0.0.1:8081:8080"
+    environment:
+      AUTH_TOKEN: ${CLOAK_AUTH_TOKEN:?set CLOAK_AUTH_TOKEN when enabling cloak}
+    volumes:
+      - cloak-manager-data:/data
+    restart: unless-stopped
+
+volumes:
+  cloak-manager-data:

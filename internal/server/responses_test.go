@@ -257,6 +257,32 @@ func TestXAIRetriesWithoutToolChoice(t *testing.T) {
 	}
 }
 
+func TestNamedOpenAIAnswerOnlyInvalidResponse(t *testing.T) {
+	_, client := fakeResponses(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"output_text": "answer with no structured citations",
+			"output": []any{
+				map[string]any{
+					"type": "message",
+					"content": []any{
+						map[string]any{"type": "output_text", "text": "answer with no structured citations"},
+					},
+				},
+			},
+		})
+	})
+	h := server.New(server.Config{
+		Token: testToken,
+		Sources: map[string]search.Searcher{
+			"openai": search.OpenAI{Client: client, Model: "gpt"},
+		},
+	})
+	rec := postSearch(t, h, testToken, map[string]any{"query": "q", "provider": "openai"})
+	if decode(t, rec)["code"] != "invalid_response" {
+		t.Fatalf("body=%s", rec.Body.String())
+	}
+}
+
 func TestNamedOpenAIEmptyShellInvalidResponse(t *testing.T) {
 	_, client := fakeResponses(t, func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"output": []any{}})

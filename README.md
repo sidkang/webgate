@@ -62,8 +62,9 @@ Listens on `WEBGATE_ADDR` (default `:8787`, all interfaces). Clients send
 
 ## Compose (webgate + SearXNG + optional Cloak Manager)
 
-`compose.yaml` runs **webgate** and a bundled **SearXNG** unit that includes a
-Google-via-CDP engine. CloakBrowser-Manager is optional (`--profile cloak`).
+**webgate** (`:8787`) is the only caller-facing API. Bundled **SearXNG** is
+internal to the compose network (`expose: 8080`, no host publish). Optional
+**Cloak Manager** binds to `127.0.0.1:8081` via `compose.cloak.yaml`.
 
 Secrets stay in `.env` (see `.env.example`). Never commit real tokens.
 
@@ -72,37 +73,43 @@ cp .env.example .env
 # set WEBGATE_TOKEN=…
 mkdir -p deploy/searxng/config deploy/searxng/data
 
-# Default: webgate (:8787) + SearXNG (:8080)
+# Default: webgate (LAN :8787) + internal SearXNG
 docker compose up -d --build
 
-# Also start Cloak Manager on :8081 (profile data in a named volume)
-docker compose --profile cloak up -d --build
+# Optional local Manager (localhost only; AUTH_TOKEN required)
+CLOAK_AUTH_TOKEN=… docker compose -f compose.yaml -f compose.cloak.yaml --profile cloak up -d --build
 ```
 
 ### First-run with Cloak fetch / SearXNG `!g`
 
-1. Start the stack (with `--profile cloak` if you need a local Manager).
+1. Start the stack (add the cloak overlay if you need a local Manager).
 2. Open Manager from the host (`http://127.0.0.1:8081`), create/launch a profile.
-3. Set `CDP_ENDPOINT` in `.env` (and `CDP_API_KEY` if required) to that profile’s CDP URL. From the **compose network**, use the Manager service hostname and **container** port, e.g. `http://cloak-manager:8080/api/profiles/<id>/cdp` — not `127.0.0.1:8081` (that address is only for the host browser). Compose cannot invent this URL; the operator sets it after launch.
+3. Set `CDP_ENDPOINT` in `.env` (and `CDP_API_KEY` if required) to that profile’s CDP URL. From the **compose network**, use `http://cloak-manager:8080/api/profiles/<id>/cdp` — not `127.0.0.1:8081`. Compose cannot invent this URL.
 4. `docker compose up -d` again so **webgate** and **searxng** both see the same `CDP_ENDPOINT` / `CDP_API_KEY`.
-5. webgate **does not** call Manager to launch profiles. Google stays **inside SearXNG** (`!g` / `google-cdp` engine). There is no webgate `provider: google`.
+5. webgate **does not** call Manager to launch profiles. Google stays **inside SearXNG** (`!g`). There is no webgate `provider: google`.
 
 ### Cloak off / external substitutes
 
 | Goal | How |
 | --- | --- |
-| No Cloak | Omit `--profile cloak`. Set `WEBGATE_CLOAK_DISABLED=1`. `POST /v1/fetch` returns `cloak_disabled`. `provider: searxng` still hits SearXNG. |
+| No Cloak | Omit the cloak overlay. Set `WEBGATE_CLOAK_DISABLED=1`. `POST /v1/fetch` returns `cloak_disabled`. `provider: searxng` still hits SearXNG. |
 | Existing Manager | Do not start `cloak-manager`. Set `CDP_ENDPOINT` to that instance’s launched profile. |
-| External SearXNG | Set `SEARXNG_BASE_URL` to that instance and start webgate without its dependency: `docker compose up -d --build webgate --no-deps`. |
-| Bundled SearXNG without Google CDP | Leave `CDP_ENDPOINT` empty; other SearXNG engines still work; `!g` needs CDP. |
+| External SearXNG | Set `SEARXNG_BASE_URL` and `docker compose up -d --build webgate --no-deps`. |
+| Bundled SearXNG without Google CDP | Leave `CDP_ENDPOINT` empty; other engines still work; `!g` needs CDP. |
 
-First boot writes `search.formats: [html, json]` so webgate `provider: searxng` can call `GET /search?format=json`. If `deploy/searxng/config/settings.yml` already exists without `json` in `search.formats`, edit it (see `deploy/searxng/README.md`) or SearXNG returns 403.
+First boot writes `search.formats: [html, json]` and a **random** `secret_key`. Existing `deploy/searxng/config/settings.yml` is never rewritten — merge `search.formats` yourself if missing (else 403 on `format=json`).
 
-Validate YAML without bringing the stack up: `docker compose config`.
+Validate YAML: `docker compose config` (cloak: add `-f compose.cloak.yaml` and set `CLOAK_AUTH_TOKEN`).
+
+### Threat model (short)
+
+`urlguard` / Fetch.pause apply to **main-frame Document** navigations only. Page-initiated iframe / XHR / WebSocket requests to LAN or metadata are **not** blocked in-process — put Chromium on an isolated network. DNS resolution remains fail-open; `198.18.0.0/15` is not specially denied.
+
+After navigate, fetch waits for **network-quiet** + **DOM signature stability** (cheap size signal; hard 64 MiB still enforced after capture).
 
 ### Search — `POST /v1/search`
 
-`Authorization: Bearer` and JSON body. Optional `limit` 1–20.
+`Authorization: Bearer` and JSON body (`Content-Type: application/json`). Optional `limit` 1–20.
 
 ```json
 {
@@ -119,11 +126,13 @@ Validate YAML without bringing the stack up: `docker compose config`.
 - omitted or `"llm"` → sequential `openai` then `xai` (unconfigured skipped)
 - `"auto"` → `searxng` then `openai` then `xai`
 - `"searxng"` | `"openai"` | `"xai"` → that source only (no fallback)
-- JSON array of **two or more** of those names → run configured sources **in parallel**, dedupe evidence, and **always** LLM-merge with the OpenAI Responses model (`OPENAI_*`). Response `provider` is the list that ran; `merge.ok` is true on success. Merge failure still returns HTTP 200 with labelled per-source answers (`## openai\n…`) plus `merge: {ok:false, code, error}` — not a total search failure. A length-1 array is invalid (list-merge only). Unconfigured names in the list are skipped; if only one configured source remains, that single result is returned without merge.
+- JSON array of **two or more** of those names → parallel search + always LLM-merge (`OPENAI_*`). Merge failure → HTTP 200 labelled raw + `merge.ok=false`.
 - `"google"`, `"all"` → `invalid_input`
-- There is **no** `merge` request field (any value → `invalid_input`)
+- There is **no** `merge` request field
 
-Extra fields: `search_context_size` (`low`|`medium`|`high`, OpenAI default high); `allowed_domains`; `user_location` (country only if two-letter ISO code — names like `"China"` are dropped). xAI ignores context size / location and rejects >5 allowed domains.
+`allowed_domains` is enforced in the **OpenAI / xAI request shape only**. `auto` / `provider: searxng` do **not** guarantee that filter (documented; not rejected with 400).
+
+Hosted OpenAI/xAI success requires a nonempty answer **and** structured evidence (`web_search_call` or citation URLs). Answer-only / scraped-link-only → `invalid_response`.
 
 ### X search — `POST /v1/x_search`
 
@@ -145,4 +154,4 @@ Acquires one URL via CDP Attach to the **server-configured** Cloak profile. Clie
 
 ## Status
 
-# follow-up: CDP network-quiet + DOM readiness; LLM search uses official openai-go Responses client (`WithBaseURL` for CLIProxy).
+Hardening: compose exposure, PendingGate, CDP URL/dialer, HTTP timeouts/caps, hosted evidence.

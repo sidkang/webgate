@@ -30,6 +30,19 @@ type CDPCapturer struct {
 
 var wsDialMu sync.Mutex
 
+// withWSDialer installs dialer as ws.DefaultDialer only for fn (chromedp dials via DefaultDialer).
+// The lock is held only for the dial window, not the whole capture.
+func withWSDialer(dialer ws.Dialer, fn func() error) error {
+	wsDialMu.Lock()
+	prev := ws.DefaultDialer
+	ws.DefaultDialer = dialer
+	defer func() {
+		ws.DefaultDialer = prev
+		wsDialMu.Unlock()
+	}()
+	return fn()
+}
+
 // Capture opens a background tab, enables main-frame Document Fetch SSRF, navigates,
 // waits for network-quiet + DOM signature stability (host timings), optionally
 // lazy-loads, reads HTML, and closes only that tab.
@@ -50,45 +63,68 @@ func (c CDPCapturer) Capture(ctx context.Context, pageURL string) (Page, error) 
 		return Page{}, NewError(CodeBackendError, "cdp endpoint discovery failed")
 	}
 
+	dialer := ws.Dialer{}
 	if c.APIKey != "" {
-		wsDialMu.Lock()
-		prev := ws.DefaultDialer
-		ws.DefaultDialer = ws.Dialer{
-			Header: ws.HandshakeHeaderHTTP(http.Header{
-				"Authorization": {"Bearer " + c.APIKey},
-			}),
-		}
-		defer func() {
-			ws.DefaultDialer = prev
-			wsDialMu.Unlock()
-		}()
+		dialer.Header = ws.HandshakeHeaderHTTP(http.Header{
+			"Authorization": {"Bearer " + c.APIKey},
+		})
 	}
 
-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, wsURL, chromedp.NoModifyURL)
-	defer allocCancel()
+	var (
+		allocCtx    context.Context
+		allocCancel context.CancelFunc
+		bootCtx     context.Context
+		bootCancel  context.CancelFunc
+		bgTargetID  target.ID
+	)
 
-	bootCtx, bootCancel := chromedp.NewContext(allocCtx)
-	defer bootCancel()
-
-	var bgTargetID target.ID
-	if err := chromedp.Run(bootCtx, chromedp.ActionFunc(func(ctx context.Context) error {
-		c := chromedp.FromContext(ctx)
-		browserExec := cdp.WithExecutor(ctx, c.Browser)
-		id, err := target.CreateTarget("about:blank").WithBackground(true).Do(browserExec)
-		if err != nil {
-			return err
+	// Dial under a request-local dialer (API key headers). Restore before the long capture.
+	if err := withWSDialer(dialer, func() error {
+		allocCtx, allocCancel = chromedp.NewRemoteAllocator(ctx, wsURL, chromedp.NoModifyURL)
+		bootCtx, bootCancel = chromedp.NewContext(allocCtx)
+		return chromedp.Run(bootCtx, chromedp.ActionFunc(func(ctx context.Context) error {
+			cc := chromedp.FromContext(ctx)
+			browserExec := cdp.WithExecutor(ctx, cc.Browser)
+			id, err := target.CreateTarget("about:blank").WithBackground(true).Do(browserExec)
+			if err != nil {
+				return err
+			}
+			bgTargetID = id
+			if cc.Target != nil && cc.Target.TargetID != "" && cc.Target.TargetID != bgTargetID {
+				_ = target.CloseTarget(cc.Target.TargetID).Do(browserExec)
+			}
+			return nil
+		}))
+	}); err != nil {
+		if allocCancel != nil {
+			allocCancel()
 		}
-		bgTargetID = id
-		if c.Target != nil && c.Target.TargetID != "" && c.Target.TargetID != bgTargetID {
-			_ = target.CloseTarget(c.Target.TargetID).Do(browserExec)
+		if bootCancel != nil {
+			bootCancel()
 		}
-		return nil
-	})); err != nil {
 		if ctx.Err() != nil {
 			return Page{}, mapCtxErr(ctx.Err())
 		}
 		return Page{}, NewError(CodeBackendError, "cdp create target failed")
 	}
+	defer allocCancel()
+	defer bootCancel()
+
+	// Always close the owned background target (success, timeout, SSRF, later failure).
+	defer func() {
+		if bgTargetID == "" {
+			return
+		}
+		tctx, cancel := context.WithTimeout(context.Background(), time.Duration(TeardownTimeoutMS)*time.Millisecond)
+		defer cancel()
+		_ = chromedp.Run(bootCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
+			cc := chromedp.FromContext(runCtx)
+			if cc == nil || cc.Browser == nil {
+				return nil
+			}
+			return target.CloseTarget(bgTargetID).Do(cdp.WithExecutor(tctx, cc.Browser))
+		}))
+	}()
 
 	tabCtx, tabCancel := chromedp.NewContext(bootCtx, chromedp.WithTargetID(bgTargetID))
 	defer tabCancel()
@@ -100,7 +136,7 @@ func (c CDPCapturer) Capture(ctx context.Context, pageURL string) (Page, error) 
 		guardMu   sync.Mutex
 		guardErr  error
 		mainFrame cdp.FrameID
-		pending   sync.WaitGroup
+		pending   = NewPendingGate()
 		openReqs  sync.Map // requestID → struct{}
 
 		documentGeneration atomic.Int32
@@ -266,15 +302,8 @@ func (c CDPCapturer) Capture(ctx context.Context, pageURL string) (Page, error) 
 	runErr := chromedp.Run(tabCtx,
 		chromedp.Navigate(pageURL),
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			done := make(chan struct{})
-			go func() {
-				pending.Wait()
-				close(done)
-			}()
-			select {
-			case <-done:
-			case <-ctx.Done():
-				return ctx.Err()
+			if err := pending.Wait(ctx); err != nil {
+				return err
 			}
 			if err := getGuardErr(); err != nil {
 				return err
@@ -283,7 +312,7 @@ func (c CDPCapturer) Capture(ctx context.Context, pageURL string) (Page, error) 
 				// No main-frame Document intercepted; still allow capture.
 				bumpDocumentGeneration()
 			}
-			return runCapturePipeline(ctx, &pending, tracker, &documentGeneration, &loadCount, &loadAtGenMu, loadCountAtGen, throwIfGuard)
+			return runCapturePipeline(ctx, pending, tracker, &documentGeneration, &loadCount, &loadAtGenMu, loadCountAtGen, throwIfGuard)
 		}),
 		chromedp.Location(&finalURL),
 		chromedp.Title(&title),
@@ -316,14 +345,6 @@ func (c CDPCapturer) Capture(ctx context.Context, pageURL string) (Page, error) 
 		return Page{}, NewError(CodeBackendError, fmt.Sprintf("Captured HTML exceeds the %d MiB limit.", MaxCaptureBytes/(1024*1024)))
 	}
 
-	_ = chromedp.Run(tabCtx, chromedp.ActionFunc(func(ctx context.Context) error {
-		t := chromedp.FromContext(ctx).Target
-		if t == nil {
-			return nil
-		}
-		return target.CloseTarget(t.TargetID).Do(cdp.WithExecutor(ctx, chromedp.FromContext(ctx).Browser))
-	}))
-
 	if finalURL == "" {
 		finalURL = pageURL
 	}
@@ -337,7 +358,7 @@ func (c CDPCapturer) Capture(ctx context.Context, pageURL string) (Page, error) 
 
 func runCapturePipeline(
 	ctx context.Context,
-	pending *sync.WaitGroup,
+	pending *PendingGate,
 	tracker *NetworkTracker,
 	documentGeneration *atomic.Int32,
 	loadCount *atomic.Int32,
@@ -357,17 +378,7 @@ func runCapturePipeline(
 		opDeadlineAt = dl.UnixMilli()
 	}
 	waitPending := func() error {
-		done := make(chan struct{})
-		go func() {
-			pending.Wait()
-			close(done)
-		}()
-		select {
-		case <-done:
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+		return pending.Wait(ctx)
 	}
 
 	restarts := 0
@@ -614,27 +625,32 @@ func asFetchError(err error, target **Error) bool {
 	return false
 }
 
+// ResolveCDPWebsocketURLForTest exports resolveCDPWebsocketURL for unit tests.
+func ResolveCDPWebsocketURLForTest(ctx context.Context, endpoint, apiKey string) (string, error) {
+	return resolveCDPWebsocketURL(ctx, endpoint, apiKey)
+}
+
 func resolveCDPWebsocketURL(ctx context.Context, endpoint, apiKey string) (string, error) {
-	if strings.Contains(endpoint, "/devtools/browser/") {
-		return endpoint, nil
+	trimmed := strings.TrimSpace(endpoint)
+	if trimmed == "" {
+		return "", fmt.Errorf("empty cdp endpoint")
 	}
-	u, err := url.Parse(endpoint)
+	lower := strings.ToLower(trimmed)
+	// Already a DevTools websocket (or any /devtools/ path) — use as-is.
+	if strings.HasPrefix(lower, "ws:") || strings.HasPrefix(lower, "wss:") || strings.Contains(lower, "/devtools/") {
+		return trimmed, nil
+	}
+
+	u, err := url.Parse(trimmed)
 	if err != nil {
 		return "", err
 	}
 	switch u.Scheme {
-	case "ws":
-		u.Scheme = "http"
-	case "wss":
-		u.Scheme = "https"
 	case "http", "https":
-		// ok
+		// keep path/query (Manager CDP URLs, /json/version, …)
 	default:
 		return "", fmt.Errorf("unsupported cdp endpoint scheme")
 	}
-	u.Path = "/json/version"
-	u.RawQuery = ""
-	u.Fragment = ""
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {

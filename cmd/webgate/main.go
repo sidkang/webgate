@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/sidkang/webgate/internal/search"
 	"github.com/sidkang/webgate/internal/server"
@@ -42,8 +43,18 @@ func main() {
 		cfg.XSearch = &search.XSearch{Client: xai.Client, Model: xai.Model}
 	}
 
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           server.New(cfg),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      130 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    32 << 10,
+	}
+
 	log.Printf("webgate listening on %s", addr)
-	if err := http.ListenAndServe(addr, server.New(cfg)); err != nil {
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
 }

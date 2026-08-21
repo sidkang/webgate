@@ -3,7 +3,8 @@
 use_default_settings: true
 
 server:
-  secret_key: "ultrasecretkey"
+  # Replaced with a random value on first boot by entrypoint.sh when settings.yml is created.
+  secret_key: "__SEARXNG_SECRET__"
   image_proxy: true
   limiter: false
 

@@ -4,12 +4,12 @@ package fetch
 type Code string
 
 const (
-	CodeInvalidInput   Code = "invalid_input"
-	CodeMissingConfig  Code = "missing_config"
-	CodeBackendError   Code = "backend_error"
-	CodeTimeout        Code = "timeout"
-	CodeAborted        Code = "aborted"
-	CodeCloakDisabled  Code = "cloak_disabled"
+	CodeInvalidInput  Code = "invalid_input"
+	CodeMissingConfig Code = "missing_config"
+	CodeBackendError  Code = "backend_error"
+	CodeTimeout       Code = "timeout"
+	CodeAborted       Code = "aborted"
+	CodeCloakDisabled Code = "cloak_disabled"
 )
 
 // Error is a typed fetch failure. Message is internal; handlers map Code to a public phrase.

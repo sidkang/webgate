@@ -128,11 +128,27 @@ func MessageInput(query string) []map[string]any {
 }
 
 func HasWebSearchSuccess(r BackendResponse) bool {
-	if strings.TrimSpace(r.Answer) != "" {
+	if strings.TrimSpace(r.Answer) == "" {
+		return false
+	}
+	if hasWebSearchCall(r) {
 		return true
 	}
-	for _, s := range r.Sources {
-		if strings.TrimSpace(s.URL) != "" {
+	for _, u := range r.CitationURLs {
+		if strings.TrimSpace(u) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasWebSearchCall(resp BackendResponse) bool {
+	for _, item := range resp.OutputItems {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if typ, _ := m["type"].(string); typ == "web_search_call" {
 			return true
 		}
 	}
@@ -381,9 +397,8 @@ func NormalizeBackendResponse(raw any, limit int) BackendResponse {
 		answerParts = append(answerParts, trimmed)
 	}
 	answer := strings.Join(answerParts, "\n")
-	if answer != "" {
-		collectTextLinks(answer, sources)
-	}
+	// Do not scrape markdown/bare links from answer text into Sources.
+	// Evidence is structured annotations / sources / citations only.
 
 	list := make([]Source, 0, len(sources))
 	for _, s := range sources {

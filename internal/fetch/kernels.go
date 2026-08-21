@@ -10,9 +10,9 @@ import (
 type KernelName string
 
 const (
-	KernelDefuddle       KernelName = "defuddle"
-	KernelHTMLExtractor  KernelName = "html-extractor"
-	KernelLLM            KernelName = "llm"
+	KernelDefuddle      KernelName = "defuddle"
+	KernelHTMLExtractor KernelName = "html-extractor"
+	KernelLLM           KernelName = "llm"
 )
 
 // LocalKernel extracts title+markdown from HTML.
